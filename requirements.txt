@@ -1,0 +1,45 @@
+# PyTorch CUDA wheels
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+# Core
+numpy>=1.24
+pandas>=2.0
+scipy>=1.10
+scikit-learn>=1.3
+xarray>=2023.6
+netCDF4>=1.6
+
+# Geospatial
+rasterio>=1.3
+geopandas>=0.14
+shapely>=2.0
+pyproj>=3.6
+osmnx>=1.6
+pystac-client>=0.7
+
+# Satellite data
+sentinelhub>=3.9
+copernicusmarine>=1.0
+cdsapi>=0.6
+
+# Deep Learning (CUDA 12.8)
+torch
+torchvision
+torchaudio
+segmentation-models-pytorch>=0.3
+
+# Visualization & Reporting
+matplotlib>=3.7
+fpdf2>=2.7
+rich>=13.0
+
+# Utilities
+python-dotenv>=1.0
+pyyaml>=6.0
+tqdm>=4.65
+
+# Server & API
+django>=5.0
+djangorestframework>=3.14
+django-cors-headers>=4.3
+pymysql>=1.1.0
