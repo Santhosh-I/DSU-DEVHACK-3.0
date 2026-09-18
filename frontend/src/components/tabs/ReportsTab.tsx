@@ -227,15 +227,27 @@ const ReportsTab: React.FC<ReportsTabProps> = ({ runId }) => {
         ))}
       </div>
 
-      {/* Expanded image */}
+      {/* Expanded image modal */}
       {selectedImage && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="glass-card overflow-hidden mb-8"
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm"
+          onClick={() => setSelectedImage(null)}
         >
-          <img src={selectedImage} alt="Preview" className="w-full max-h-[600px] object-contain" />
-        </motion.div>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="relative max-w-6xl w-full h-full max-h-[90vh] glass-card flex items-center justify-center overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button 
+              className="absolute top-4 right-4 p-2 bg-black/50 text-white hover:bg-black/80 rounded-full backdrop-blur-md transition-colors z-10"
+              onClick={() => setSelectedImage(null)}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+            <img src={selectedImage} alt="Preview" className="max-w-full max-h-full object-contain" />
+          </motion.div>
+        </div>
       )}
     </div>
   );
