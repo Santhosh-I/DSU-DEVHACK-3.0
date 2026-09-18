@@ -18,6 +18,7 @@ import {
   FileText,
   ClipboardList,
   LayoutDashboard,
+  Flame,
 } from "lucide-react";
 
 function KpiCard({ label, value, icon: Icon, color }: { label: string; value: string; icon: any; color: string }) {
@@ -137,6 +138,13 @@ const DashboardPage: React.FC = () => {
             <h2 className="font-heading font-semibold text-lg">Pipeline Runs</h2>
             <div className="flex items-center gap-3">
               <span className="text-xs text-muted-foreground">{runs.length} run(s)</span>
+              <Link
+                to="/hotspots"
+                className="px-3 py-1.5 bg-muted/50 text-foreground rounded-lg text-xs font-semibold hover:bg-muted/80 transition-colors flex items-center gap-1.5"
+              >
+                <Flame className="w-3.5 h-3.5 text-primary" />
+                Hotspot Map
+              </Link>
               <Link
                 to="/tracking"
                 className="px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-xs font-semibold hover:bg-primary/90 transition-colors"

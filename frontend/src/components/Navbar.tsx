@@ -7,12 +7,14 @@ import {
   MapPin,
   LayoutDashboard,
   Image,
+  Flame,
 } from "lucide-react";
 
 const navItems = [
   { path: "/", label: "Home", icon: Home },
   { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { path: "/tracking", label: "New Tracking", icon: MapPin },
+  { path: "/hotspots", label: "Hotspot Locations", icon: Flame },
   { path: "/model", label: "Model Performance", icon: Image },
 ];
 
