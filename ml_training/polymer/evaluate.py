@@ -100,7 +100,14 @@ def main():
     dtest_tuned = xgb.DMatrix(X_test_tuned, feature_names=tuned_feat)
     preds_tuned = tuned_model.predict(dtest_tuned)
     
-    print(classification_report(y_test, preds_tuned, target_names=classes, digits=3, zero_division=0))
+    report_str = classification_report(y_test, preds_tuned, target_names=classes, digits=3, zero_division=0)
+    print(report_str)
+    
+    report_dict = classification_report(y_test, preds_tuned, target_names=classes, digits=3, zero_division=0, output_dict=True)
+    eval_out_path = MODELS_DIR / "polymer_xgb_model_tuned_eval.json"
+    with open(eval_out_path, "w") as f:
+        json.dump(report_dict, f, indent=4)
+    print(f"\nEvaluation scores saved to -> {eval_out_path}")
 
     # ── Head to Head Comparison ───────────────────────────────────────────
     if has_orig:
