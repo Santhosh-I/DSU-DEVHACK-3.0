@@ -78,6 +78,7 @@ def run_pipeline(
     config_path: str = None,    # None → resolved relative to this file
     filter_by_bbox: bool = True,
     max_clusters: Optional[int] = None,
+    progress_callback = None,
 ) -> Dict[str, Any]:
     """Run the complete Plastic-Ledger pipeline.
 
@@ -95,6 +96,7 @@ def run_pipeline(
             patches that intersect the bbox. Set to False to process the
             entire satellite tile (all ~2400 patches).
         max_clusters: Limit backtracking to this many clusters.
+        progress_callback: Optional callback function to report stage progress.
 
     Returns:
         Dict with run summary including output paths and metrics.
@@ -177,6 +179,7 @@ def run_pipeline(
     # ═══════════════════════════════════════════
     if 1 not in skip_stages:
         logger.info("[bold blue]━━━ Stage 1: Satellite Data Ingestion ━━━[/]")
+        if progress_callback: progress_callback("Satellite Data Ingestion")
         try:
             ingest_mod = importlib.import_module("pipeline.01_ingest")
             ingest_run = ingest_mod.run
@@ -247,6 +250,7 @@ def run_pipeline(
         # ═══════════════════════════════════════
         if 2 not in skip_stages:
             logger.info("[bold blue]━━━ Stage 2: Preprocessing ━━━[/]")
+            if progress_callback: progress_callback("Preprocessing")
             try:
                 preprocess_mod = importlib.import_module("pipeline.02_preprocess")
                 preprocess_run = preprocess_mod.run
@@ -271,6 +275,7 @@ def run_pipeline(
         geojson_path = scene_detections / "detections.geojson"
         if 3 not in skip_stages:
             logger.info("[bold blue]━━━ Stage 3: Marine Debris Detection ━━━[/]")
+            if progress_callback: progress_callback("Marine Debris Detection")
             try:
                 detect_mod = importlib.import_module("pipeline.03_detect")
                 detect_run = detect_mod.run
@@ -298,6 +303,7 @@ def run_pipeline(
         classified_path = scene_detections / "detections_classified.geojson"
         if 4 not in skip_stages:
             logger.info("[bold blue]━━━ Stage 4: Polymer Classification ━━━[/]")
+            if progress_callback: progress_callback("Polymer Classification")
             try:
                 polymer_mod = importlib.import_module("pipeline.04_polymer")
                 polymer_run = polymer_mod.run
@@ -336,6 +342,7 @@ def run_pipeline(
         sources = []
         if 5 not in skip_stages:
             logger.info("[bold blue]━━━ Stage 5: Hydrodynamic Back-Tracking ━━━[/]")
+            if progress_callback: progress_callback("Hydrodynamic Back-Tracking")
             try:
                 backtrack_mod = importlib.import_module("pipeline.05_backtrack")
                 backtrack_run = backtrack_mod.run
@@ -366,6 +373,7 @@ def run_pipeline(
         attribution_path = scene_attribution / "attribution_report.json"
         if 6 not in skip_stages:
             logger.info("[bold blue]━━━ Stage 6: Source Attribution ━━━[/]")
+            if progress_callback: progress_callback("Source Attribution")
             try:
                 attribute_mod = importlib.import_module("pipeline.06_attribute")
                 attribute_run = attribute_mod.run
@@ -391,6 +399,7 @@ def run_pipeline(
         # ═══════════════════════════════════════
         if 7 not in skip_stages:
             logger.info("[bold blue]━━━ Stage 7: Report Generation ━━━[/]")
+            if progress_callback: progress_callback("Report Generation")
             try:
                 report_mod = importlib.import_module("pipeline.07_report")
                 report_run = report_mod.run

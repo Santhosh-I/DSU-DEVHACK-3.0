@@ -33,6 +33,10 @@ def execute_pipeline(run_id):
         
         bbox = tuple(float(x) for x in run_instance.bbox.split(','))
         
+        def update_stage(stage_name):
+            run_instance.current_stage = stage_name
+            run_instance.save(update_fields=['current_stage'])
+            
         summary = run_pipeline(
             bbox=bbox,
             target_date=str(run_instance.target_date),
@@ -42,7 +46,8 @@ def execute_pipeline(run_id):
             backtrack_days=run_instance.backtrack_days,
             max_clusters=run_instance.max_clusters,
             filter_by_bbox=not run_instance.process_all_patches,
-            config_path=str(config_path)
+            config_path=str(config_path),
+            progress_callback=update_stage
         )
         
         has_failures = len(summary.get('stages_failed', [])) > 0

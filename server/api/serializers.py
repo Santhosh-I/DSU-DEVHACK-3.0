@@ -5,7 +5,7 @@ class PipelineRunSerializer(serializers.ModelSerializer):
     class Meta:
         model = PipelineRun
         fields = '__all__'
-        read_only_fields = ['id', 'status', 'output_dir', 'created_at', 'completed_at', 'summary', 'error_message']
+        read_only_fields = ['id', 'status', 'current_stage', 'output_dir', 'created_at', 'completed_at', 'summary', 'error_message']
 
     def validate_bbox(self, value):
         parts = value.split(',')

@@ -13,7 +13,7 @@ evaluation/
 
 best_models/
 *.pth
-
+db*
 cache/
 # Pipeline data (large / generated)
 data/raw/

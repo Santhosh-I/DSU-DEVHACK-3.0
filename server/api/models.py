@@ -20,6 +20,7 @@ class PipelineRun(models.Model):
                                 help_text="Optional human-readable name. Auto-generated if blank.")
     
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    current_stage = models.CharField(max_length=100, blank=True, null=True)
     output_dir = models.CharField(max_length=500, blank=True, null=True)
     
     created_at = models.DateTimeField(auto_now_add=True)

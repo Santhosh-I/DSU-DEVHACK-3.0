@@ -121,13 +121,10 @@ const DashboardPage: React.FC = () => {
         </motion.div>
 
         {/* KPI Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
           <KpiCard label="Total Detections" value={totalDetections.toString()} icon={Crosshair} color="bg-secondary/20 text-secondary" />
           <KpiCard label="Confirmed Plastic" value={totalPlastic.toString()} icon={FlaskConical} color="bg-destructive/20 text-destructive" />
-          <KpiCard label="False Positive Rate" value={`${fpRate}%`} icon={ShieldAlert} color="bg-yellow-500/20 text-yellow-400" />
           <KpiCard label="Completed Runs" value={completedRuns.length.toString()} icon={CheckCircle2} color="bg-emerald-500/20 text-emerald-400" />
-          <KpiCard label="Cloud Cover" value={latestCompleted ? `${latestCompleted.cloud_cover}%` : "—"} icon={Cloud} color="bg-blue-400/20 text-blue-400" />
-          <KpiCard label="Backtrack Days" value={latestCompleted ? latestCompleted.backtrack_days.toString() : "—"} icon={Undo2} color="bg-purple-400/20 text-purple-400" />
         </div>
 
         {/* Runs Table */}
@@ -156,6 +153,8 @@ const DashboardPage: React.FC = () => {
                   <th className="text-left px-5 py-3 font-medium">Status</th>
                   <th className="text-left px-5 py-3 font-medium">Region</th>
                   <th className="text-left px-5 py-3 font-medium">Target Date</th>
+                  <th className="text-left px-5 py-3 font-medium">Cloud Cover</th>
+                  <th className="text-left px-5 py-3 font-medium">Backtrack Days</th>
                   <th className="text-left px-5 py-3 font-medium">Detections</th>
                   <th className="text-left px-5 py-3 font-medium">Plastic</th>
                   <th className="text-center px-5 py-3 font-medium">Actions</th>
@@ -187,11 +186,13 @@ const DashboardPage: React.FC = () => {
                           {run.status === 'COMPLETED' ? <CheckCircle2 className="w-3 h-3" /> :
                            run.status === 'FAILED' ? <XCircle className="w-3 h-3" /> :
                            <Clock className="w-3 h-3 animate-pulse" />}
-                          {run.status}
+                          {run.status === 'RUNNING' && run.current_stage ? run.current_stage : run.status}
                         </span>
                       </td>
                       <td className="px-5 py-3 text-muted-foreground text-xs max-w-[180px] truncate" title={run.bbox}>{run.bbox}</td>
                       <td className="px-5 py-3 text-muted-foreground">{run.target_date}</td>
+                      <td className="px-5 py-3 font-semibold">{run.cloud_cover}%</td>
+                      <td className="px-5 py-3 font-semibold">{run.backtrack_days}</td>
                       <td className="px-5 py-3 font-semibold">{isCompleted ? rTotal : "—"}</td>
                       <td className="px-5 py-3 font-semibold text-destructive">{isCompleted ? rPlastic : "—"}</td>
                       <td className="px-5 py-3">
@@ -245,7 +246,7 @@ const DashboardPage: React.FC = () => {
                 })}
                 {runs.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-5 py-12 text-center text-muted-foreground">
+                    <td colSpan={9} className="px-5 py-12 text-center text-muted-foreground">
                       <p className="mb-2">No pipeline runs yet.</p>
                       <Link to="/tracking" className="text-primary hover:text-primary/80 font-medium">
                         Create your first run →

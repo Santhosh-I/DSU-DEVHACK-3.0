@@ -1,6 +1,7 @@
 export interface PipelineRun {
   id: string;
   status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+  current_stage: string | null;
   bbox: string;
   target_date: string;
   cloud_cover: number;
