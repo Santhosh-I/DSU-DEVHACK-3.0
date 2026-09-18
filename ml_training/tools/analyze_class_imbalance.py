@@ -6,7 +6,7 @@ and identifies Marine Debris representation imbalance.
 
 Usage:
     python analyze_class_imbalance.py \
-        --data_dir D:/Plastic-Ledger/ml_training/dataset/MARIDA \
+        --data_dir D:/DSU-DEVHACK-3.0/ml_training/dataset/MARIDA \
         --output imbalance_report.json
 """
 

@@ -34,7 +34,7 @@ logger = get_logger(__name__)
 # ── Polymer Model (XGBoost / RF) ──────────────────────────────────────────
 # Default location for the trained models, label map,
 # and feature list produced by train_xgboost_polymer.py / train_polymer_model.py
-_DEFAULT_RF_MODEL_DIR = Path(r"d:\Plastic-Ledger\models\production")
+_DEFAULT_RF_MODEL_DIR = Path(r"d:\DSU-DEVHACK-3.0\models\production")
 XGB_MODEL_PATH  = _DEFAULT_RF_MODEL_DIR / "polymer_xgb_model.pkl"
 RF_MODEL_PATH   = _DEFAULT_RF_MODEL_DIR / "polymer_rf_model.pkl"
 RF_LABEL_PATH   = _DEFAULT_RF_MODEL_DIR / "polymer_label_map.json"

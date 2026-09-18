@@ -9,7 +9,7 @@ Usage:
         --bbox "80.0,8.0,82.0,10.0" \
         --target_date "2024-01-31" \
         --output_dir "data/runs/run_001" \
-    --model_path "d:/Plastic-Ledger/models/segformer/runs/segformer_v1/best_model_SegTransformer.pth" \
+    --model_path "d:/DSU-DEVHACK-3.0/models/segformer/runs/segformer_v1/best_model_SegTransformer.pth" \
         --cloud_cover 20 \
         --backtrack_days 30 \
         --skip_stages ""

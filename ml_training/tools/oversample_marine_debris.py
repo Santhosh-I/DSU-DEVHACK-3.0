@@ -5,8 +5,8 @@ Creates a balanced training dataset by oversampling patches with Marine Debris.
 
 Usage:
     python oversample_marine_debris.py \
-        --data_dir D:/Plastic-Ledger/ml_training/dataset/MARIDA \
-        --output_dir D:/Plastic-Ledger/ml_training/dataset/MARIDA_BALANCED \
+        --data_dir D:/DSU-DEVHACK-3.0/ml_training/dataset/MARIDA \
+        --output_dir D:/DSU-DEVHACK-3.0/ml_training/dataset/MARIDA_BALANCED \
         --target_debris_ratio 0.35
 """
 
