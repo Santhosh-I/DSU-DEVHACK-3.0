@@ -1,0 +1,20 @@
+{
+  "mIoU": 0.7135614067245738,
+  "debris_iou": 0.48445171770138834,
+  "debris_precision": 0.5627376415157079,
+  "debris_recall": 0.7769028850999924,
+  "debris_f1": 0.6527007241293664,
+  "per_class_iou": {
+    "Marine Debris": 0.48445171770138834,
+    "Dense Sargassum": 0.6112531964098438,
+    "Sparse Sargassum": 0.3884057967261779,
+    "Natural Organic": 0.0,
+    "Ship": 0.8110944521655963,
+    "Clouds": 0.9871355319946863,
+    "Marine Water": 0.9065876611772683,
+    "Sediment-Laden Water": 0.9982078468299472,
+    "Foam": 0.8518518497485139,
+    "Turbid Water": 0.9317690919036669,
+    "Shallow Water": 0.8784183293132232
+  }
+}

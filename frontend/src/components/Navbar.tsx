@@ -6,12 +6,14 @@ import {
   Home,
   MapPin,
   LayoutDashboard,
+  Image,
 } from "lucide-react";
 
 const navItems = [
   { path: "/", label: "Home", icon: Home },
   { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { path: "/tracking", label: "New Tracking", icon: MapPin },
+  { path: "/model", label: "Model Outputs", icon: Image },
 ];
 
 const Navbar: React.FC = () => {
