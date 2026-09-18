@@ -1,0 +1,68 @@
+model:
+  checkpoint: models/production/best_model_SegFormer_v2.pth
+  architecture: segformer_b2       # SegFormer B2 checkpoint
+  num_bands: 11
+  num_classes: 11
+  debris_threshold: 0.10        # Recall-optimised
+  debris_logit_boost: 0.0       # Unboosted logits (prevents coastal false positives)
+  tta: true
+
+preprocessing:
+  patch_size: 256
+  overlap: 32
+  patch_storage: npz
+  patch_dtype: float16
+  ndwi_threshold: 0.15
+  mndwi_threshold: 0.05
+  dilate_pixels: 3
+  enable_land_masking: true
+  band_means: [0.057, 0.054, 0.046, 0.036, 0.033, 0.041, 0.049, 0.043, 0.050, 0.031, 0.019]
+  band_stds:  [0.010, 0.010, 0.013, 0.010, 0.012, 0.020, 0.030, 0.020, 0.030, 0.020, 0.013]
+
+detection:
+  min_cluster_area_m2: 100
+  max_cluster_area_m2: 50000000
+  debris_class_index: 0
+  enable_land_masking: true
+
+backtracking:
+  days: 30
+  n_particles: 50
+  time_step_hours: 1
+  ocean_wind_ratio: [0.97, 0.03]
+  dbscan_eps_degrees: 0.5
+  dbscan_min_samples: 5
+  integrator: RK4                 # Options: RK4, RK45, Euler
+  horizontal_diffusion:
+    enabled: true
+    Kh: 1.5                       # Horizontal diffusion coefficient in m^2/s (0 for deterministic)
+  stokes_drift:
+    enabled: false
+    source: CMEMS_WAVE            # CMEMS Wave product if available
+    fallback: DirectWindageKernel # Fallback kernel if wave data absent
+  plastic_windage:
+    bottle: 0.03
+    fishing_net: 0.015
+    rope: 0.02
+    foam: 0.05
+    generic: 0.03
+  uncertainty:
+    compute_ensemble_stats: true
+    compute_confidence_ellipse: true
+  diagnostics:
+    compute_land_interactions: true
+    compute_residence_time: true
+
+attribution:
+  weights:
+    fishing: 0.4
+    industrial: 0.3
+    shipping: 0.2
+    river: 0.1
+  search_radius_km: 10
+
+apis:
+  copernicus_username: ${COPERNICUS_USERNAME}
+  copernicus_password: ${COPERNICUS_PASSWORD}
+  gfw_token: ${GFW_TOKEN}
+  cds_url: https://cds.climate.copernicus.eu/api/v2
