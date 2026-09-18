@@ -1,0 +1,17 @@
+{
+  "Cloud Shadows": 0,
+  "Clouds": 1,
+  "Dense Sargassum": 2,
+  "Foam": 3,
+  "Marine Debris": 4,
+  "Marine Water": 5,
+  "Mixed Water": 6,
+  "Natural Organic Material": 7,
+  "Sediment-Laden Water": 8,
+  "Shallow Water": 9,
+  "Ship": 10,
+  "Sparse Sargassum": 11,
+  "Turbid Water": 12,
+  "Wakes": 13,
+  "Waves": 14
+}
