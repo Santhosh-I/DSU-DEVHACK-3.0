@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import { MapContainer, TileLayer, CircleMarker, Rectangle, Polyline, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { loadAttribution, loadBacktrackSummary, loadRunMetadata, loadAllBacktrackGeoJsons, loadDebrisSummaryCsv } from "@/services/dataService";
+import { loadAttribution, loadBacktrackSummary, loadRunMetadata, loadRunSummary, loadAllBacktrackGeoJsons, loadDebrisSummaryCsv } from "@/services/dataService";
 import { AttributionEntry, BacktrackEntry, RunMetadata, SOURCE_ICONS, DebrisSummaryRow } from "@/types";
 import { backtrackCluster } from "@/lib/api";
 import {
@@ -71,6 +71,7 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
   const [attribution, setAttribution] = useState<AttributionEntry[]>([]);
   const [backtrack, setBacktrack] = useState<BacktrackEntry[]>([]);
   const [metadata, setMetadata] = useState<RunMetadata | null>(null);
+  const [targetDate, setTargetDate] = useState<string | null>(null);
   const [csv, setCsv] = useState<DebrisSummaryRow[]>([]);
   const [backtrackGeoJsons, setBacktrackGeoJsons] = useState<Record<number, any>>({});
   const [loading, setLoading] = useState(true);
@@ -95,12 +96,14 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
       loadAttribution(runId), 
       loadBacktrackSummary(runId), 
       loadRunMetadata(runId),
+      loadRunSummary(runId),
       loadDebrisSummaryCsv(runId)
     ]).then(
-      async ([attr, bt, meta, csvData]) => {
+      async ([attr, bt, meta, summary, csvData]) => {
         setAttribution(attr);
         setBacktrack(bt);
         setMetadata(meta);
+        setTargetDate(summary.target_date);
         setCsv(csvData);
 
         const clusterIds = bt.map((b) => b.cluster_id);
@@ -215,6 +218,13 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
     c === "high" ? "text-emerald-400 bg-emerald-500/15" : c === "medium" ? "text-yellow-400 bg-yellow-500/15" : "text-red-400 bg-red-500/15";
 
   const currentTile = TILE_LAYERS[tileKey];
+  const timelineEndDate = targetDate ? new Date(`${targetDate}T00:00:00`) : null;
+  const timelineStartDate = timelineEndDate && metadata
+    ? new Date(timelineEndDate.getTime() - metadata.bt_days * 24 * 60 * 60 * 1000)
+    : null;
+  const formatTimelineDate = (date: Date | null) => date
+    ? date.toISOString().slice(0, 10)
+    : "—";
 
   return (
     <div className="space-y-6">
@@ -430,7 +440,7 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
           </div>
 
           <div className="flex-1 min-w-[240px] flex items-center gap-3">
-            <span className="text-muted-foreground font-mono font-medium">Day -7.0</span>
+            <span className="text-muted-foreground font-mono font-medium">{formatTimelineDate(timelineStartDate)}</span>
             <input
               type="range"
               min={0.05}
@@ -440,12 +450,12 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
               onChange={(e) => { setIsPlaying(false); setAnimProgress(parseFloat(e.target.value)); }}
               className="flex-1 accent-primary cursor-pointer h-2"
             />
-            <span className="text-muted-foreground font-mono font-medium">Day 0.0</span>
+            <span className="text-muted-foreground font-mono font-medium">{formatTimelineDate(timelineEndDate)}</span>
           </div>
 
           <div className="flex items-center gap-1.5">
             <span className="text-muted-foreground mr-1 font-medium">Speed:</span>
-            {[1, 2, 4].map((spd) => (
+            {[0.5, 0.75, 1, 2, 4].map((spd) => (
               <button
                 key={spd}
                 onClick={() => setAnimSpeed(spd)}
