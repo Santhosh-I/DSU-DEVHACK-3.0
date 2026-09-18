@@ -1,0 +1,105 @@
+{
+    "Cloud Shadows": {
+        "precision": 0.3725841801155609,
+        "recall": 0.5124691696355166,
+        "f1-score": 0.43147208121827413,
+        "support": 3649.0
+    },
+    "Clouds": {
+        "precision": 0.856848245588192,
+        "recall": 0.8855463873580367,
+        "f1-score": 0.8709609798460756,
+        "support": 32843.0
+    },
+    "Dense Sargassum": {
+        "precision": 0.7569230769230769,
+        "recall": 0.9710526315789474,
+        "f1-score": 0.8507204610951009,
+        "support": 760.0
+    },
+    "Foam": {
+        "precision": 0.6554054054054054,
+        "recall": 0.5012919896640827,
+        "f1-score": 0.568081991215227,
+        "support": 387.0
+    },
+    "Marine Debris": {
+        "precision": 0.571875,
+        "recall": 0.9606299212598425,
+        "f1-score": 0.7169441723800196,
+        "support": 381.0
+    },
+    "Marine Water": {
+        "precision": 0.7151865475564898,
+        "recall": 0.5805570959348206,
+        "f1-score": 0.6408777340898923,
+        "support": 23443.0
+    },
+    "Mixed Water": {
+        "precision": 0.04136690647482014,
+        "recall": 0.25,
+        "f1-score": 0.07098765432098765,
+        "support": 92.0
+    },
+    "Natural Organic Material": {
+        "precision": 0.5681818181818182,
+        "recall": 0.5102040816326531,
+        "f1-score": 0.5376344086021505,
+        "support": 49.0
+    },
+    "Sediment-Laden Water": {
+        "precision": 0.9998817382329542,
+        "recall": 0.9996345539946473,
+        "f1-score": 0.9997581308350936,
+        "support": 93037.0
+    },
+    "Shallow Water": {
+        "precision": 0.3327178729689808,
+        "recall": 0.35953711093375895,
+        "f1-score": 0.3456079785193709,
+        "support": 2506.0
+    },
+    "Ship": {
+        "precision": 0.5061043285238623,
+        "recall": 0.7768313458262351,
+        "f1-score": 0.6129032258064516,
+        "support": 1174.0
+    },
+    "Sparse Sargassum": {
+        "precision": 0.5367329299913569,
+        "recall": 0.7048808172531215,
+        "f1-score": 0.6094210009813543,
+        "support": 881.0
+    },
+    "Turbid Water": {
+        "precision": 0.9097632216767136,
+        "recall": 0.9085210699435239,
+        "f1-score": 0.9091417215252764,
+        "support": 32226.0
+    },
+    "Wakes": {
+        "precision": 0.14065180102915953,
+        "recall": 0.2089171974522293,
+        "f1-score": 0.168118913377755,
+        "support": 1570.0
+    },
+    "Waves": {
+        "precision": 0.14935622317596567,
+        "recall": 0.0932975871313673,
+        "f1-score": 0.11485148514851486,
+        "support": 1865.0
+    },
+    "accuracy": 0.8781913446883195,
+    "macro avg": {
+        "precision": 0.5409052863896237,
+        "recall": 0.6148913973065855,
+        "f1-score": 0.5631654625974363,
+        "support": 194863.0
+    },
+    "weighted avg": {
+        "precision": 0.8831322418085693,
+        "recall": 0.8781913446883195,
+        "f1-score": 0.8790233174074197,
+        "support": 194863.0
+    }
+}

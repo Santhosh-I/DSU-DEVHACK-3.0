@@ -5,6 +5,7 @@ import LandingPage from "@/pages/LandingPage";
 import TrackingPage from "@/pages/TrackingPage";
 import DashboardPage from "@/pages/DashboardPage";
 import RunDetailPage from "@/pages/RunDetailPage";
+import ModelPage from "@/pages/modelpage";
 
 const App: React.FC = () => {
   return (
@@ -15,6 +16,7 @@ const App: React.FC = () => {
           <Route path="/" element={<LandingPage />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/tracking" element={<TrackingPage />} />
+          <Route path="/model" element={<ModelPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
         </Routes>
       </div>
