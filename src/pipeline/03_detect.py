@@ -9,7 +9,7 @@ Usage (standalone):
     python -m pipeline.03_detect \\
         --scene_id SCENE_ID \\
         --patches_dir data/processed/SCENE_ID/patches \\
-        --model_path d:/Plastic-Ledger/models/segformer/runs/segformer_v1/best_model_SegTransformer.pth \\
+        --model_path d:/DSU-DEVHACK-3.0/models/segformer/runs/segformer_v1/best_model_SegTransformer.pth \\
         --output_dir data/detections
 
 Dependencies: torch, transformers, rasterio, scipy, geopandas, numpy
@@ -898,7 +898,7 @@ def main():
     parser.add_argument(
         "--model_path",
         type=str,
-        default=r"d:/Plastic-Ledger/models/unet/runs/marida_v1/best_model.pth",
+        default=r"d:/DSU-DEVHACK-3.0/models/unet/runs/marida_v1/best_model.pth",
     )
     parser.add_argument("--output_dir", type=str, default="data/detections")
     parser.add_argument("--config", type=str, default="config/config.yaml")

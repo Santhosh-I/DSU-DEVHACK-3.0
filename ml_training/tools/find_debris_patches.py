@@ -2,7 +2,7 @@
 Find patches with the most labeled Marine Debris pixels in GT masks.
 
 Usage:
-    python find_debris_patches.py --data_dir D:\Plastic-Ledger\models\dataset\MARIDA
+    python find_debris_patches.py --data_dir D:\DSU-DEVHACK-3.0\models\dataset\MARIDA
 """
 
 import argparse

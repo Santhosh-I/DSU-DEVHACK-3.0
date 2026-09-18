@@ -35,7 +35,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # project root / env setup
 _script_dir  = Path(__file__).resolve().parent           # ml_training_2.0/scripts/
-_project_root = _script_dir.parent.parent                # Plastic-Ledger/
+_project_root = _script_dir.parent.parent                # DSU-DEVHACK-3.0/
 _src_dir     = _project_root / "src"
 
 if str(_src_dir) not in sys.path:
