@@ -1,7 +1,7 @@
 import React from "react";
 import { motion } from "framer-motion";
-import { useState } from "react";
-import { Image as ImageIcon, ChevronLeft, ChevronRight, ScanSearch, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { BarChart3, Image as ImageIcon, ChevronLeft, ChevronRight, ScanSearch, X } from "lucide-react";
 
 const outputImages = [
   "15-11-20_16PCC_18.png",
@@ -16,10 +16,50 @@ const outputImages = [
   "4-3-18_50LLR_22.png",
 ];
 
+const formatPercent = (value) => `${(value * 100).toFixed(1)}%`;
+
+function Metric({ label, value, accent = "text-primary" }) {
+  return (
+    <div className="rounded-lg bg-muted/30 px-3 py-2.5">
+      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+      <p className={`mt-1 text-lg font-semibold ${accent}`}>{value}</p>
+    </div>
+  );
+}
+
+function ScoreBar({ label, value, highlight = false }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <span className={`truncate ${highlight ? "font-semibold text-primary" : "text-muted-foreground"}`}>{label}</span>
+        <span className="font-mono text-foreground">{formatPercent(value)}</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+        <div
+          className={`h-full rounded-full ${highlight ? "bg-primary" : "bg-secondary/70"}`}
+          style={{ width: `${Math.max(0, Math.min(value * 100, 100))}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 const ModelPage = () => {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [evaluation, setEvaluation] = useState(null);
   const selectedImage = outputImages[selectedIndex];
+
+  useEffect(() => {
+    Promise.all([
+      fetch("/asserts/segformer_eval_results/evaluation_results.json").then((response) => response.json()),
+      fetch("/asserts/polymer/polymer_xgb_model_eval.json").then((response) => response.json()),
+    ]).then(([segformer, polymer]) => {
+      setEvaluation({ segformer, polymer });
+    }).catch((error) => {
+      console.error("Unable to load model evaluation results", error);
+    });
+  }, []);
 
   const selectPrevious = () => {
     setSelectedIndex((currentIndex) =>
@@ -51,6 +91,81 @@ const ModelPage = () => {
             </div>
           </div>
         </motion.header>
+
+        {evaluation && (
+          <section aria-label="Model evaluation results" className="grid gap-5 lg:grid-cols-2 mb-8">
+            <motion.article
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="glass-card p-5"
+            >
+              <div className="flex items-center gap-2 mb-4">
+                <BarChart3 className="w-4 h-4 text-primary" />
+                <div>
+                  <h2 className="font-heading font-semibold">SegFormer v2</h2>
+                  <p className="text-xs text-muted-foreground">Segmentation evaluation</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-5">
+                <Metric label="Overall mIoU" value={formatPercent(evaluation.segformer.mIoU)} />
+                <Metric label="Debris IoU" value={formatPercent(evaluation.segformer.debris_iou)} />
+                <Metric label="Debris F1" value={formatPercent(evaluation.segformer.debris_f1)} />
+                <Metric label="Precision" value={formatPercent(evaluation.segformer.debris_precision)} />
+                <Metric label="Recall" value={formatPercent(evaluation.segformer.debris_recall)} />
+              </div>
+              <div className="space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Class IoU</p>
+                {Object.entries(evaluation.segformer.per_class_iou).map(([label, value]) => (
+                  <ScoreBar key={label} label={label} value={value} highlight={label === "Marine Debris"} />
+                ))}
+              </div>
+            </motion.article>
+
+            <motion.article
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.08 }}
+              className="glass-card p-5"
+            >
+              <div className="flex items-center gap-2 mb-4">
+                <BarChart3 className="w-4 h-4 text-secondary" />
+                <div>
+                  <h2 className="font-heading font-semibold">Polymer XGBoost</h2>
+                  <p className="text-xs text-muted-foreground">Classification evaluation</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-5">
+                <Metric label="Accuracy" value={formatPercent(evaluation.polymer.accuracy)} accent="text-secondary" />
+                <Metric label="Macro F1" value={formatPercent(evaluation.polymer["macro avg"]["f1-score"])} accent="text-secondary" />
+                <Metric label="Weighted F1" value={formatPercent(evaluation.polymer["weighted avg"]["f1-score"])} accent="text-secondary" />
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-border/30">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/30 text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium">Class</th>
+                      <th className="px-3 py-2 text-right font-medium">Precision</th>
+                      <th className="px-3 py-2 text-right font-medium">Recall</th>
+                      <th className="px-3 py-2 text-right font-medium">F1</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(evaluation.polymer)
+                      .filter(([label, values]) => values && typeof values === "object" && values["f1-score"] !== undefined)
+                      .map(([label, values]) => (
+                        <tr key={label} className="border-t border-border/20">
+                          <td className={`px-3 py-2 ${label === "Marine Debris" ? "font-semibold text-primary" : "text-muted-foreground"}`}>{label}</td>
+                          <td className="px-3 py-2 text-right font-mono">{formatPercent(values.precision)}</td>
+                          <td className="px-3 py-2 text-right font-mono">{formatPercent(values.recall)}</td>
+                          <td className="px-3 py-2 text-right font-mono">{formatPercent(values["f1-score"])}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </motion.article>
+          </section>
+        )}
 
         <section aria-label="Model output images" className="space-y-5">
           <div className="glass-card p-3">
