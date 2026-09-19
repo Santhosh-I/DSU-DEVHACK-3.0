@@ -45,6 +45,14 @@ class TestCSVGeneration:
             "location_name": "Sri Lankan Coast",
             "country": "Sri Lanka",
             "attribution_score": 0.72,
+            "nearest_ship": {
+                "ship_name": "TEST_TRAWLER",
+                "mmsi": "123456789",
+                "vessel_type": "FISHING",
+                "distance_km": 12.4,
+                "flag": "LKA",
+            },
+            "nearby_vessel_count": 1,
         }]
 
         out = report.generate_csv(gdf, attribution, "test_scene", tmp_path / "test.csv")
@@ -53,6 +61,10 @@ class TestCSVGeneration:
         assert len(df) == 1
         assert df.iloc[0]["polymer_type"] == "PE/PP"
         assert df.iloc[0]["top_source_type"] == "fishing"
+        assert df.iloc[0]["nearest_ship_name"] == "TEST_TRAWLER"
+        assert df.iloc[0]["nearest_ship_mmsi"] == 123456789
+        assert df.iloc[0]["nearest_ship_distance_km"] == 12.4
+        assert df.iloc[0]["nearby_vessel_count"] == 1
 
 
 class TestGeoJSONSummary:
@@ -66,6 +78,36 @@ class TestGeoJSONSummary:
         assert out.exists()
         result_gdf = gpd.read_file(out)
         assert len(result_gdf) == 0
+
+    def test_geojson_with_vessels(self, tmp_path):
+        """GeoJSON summary should include vessel attributes in feature properties."""
+        gdf = gpd.GeoDataFrame({
+            "geometry": [Point(80.5, 7.5)],
+            "cluster_id": [1],
+            "area_m2": [850],
+        }, crs="EPSG:4326")
+
+        attribution = [{
+            "debris_cluster_id": 1,
+            "source_type": "shipping",
+            "nearest_ship": {
+                "ship_name": "CARGO_ONE",
+                "mmsi": "987654321",
+                "vessel_type": "CARGO",
+                "distance_km": 8.2,
+                "flag": "PAN",
+            },
+            "nearby_vessel_count": 3,
+        }]
+
+        out = report.generate_geojson_summary(gdf, attribution, tmp_path / "test.geojson")
+        assert out.exists()
+        res = gpd.read_file(out)
+        assert len(res) == 1
+        assert res.iloc[0]["nearest_ship_name"] == "CARGO_ONE"
+        assert res.iloc[0]["nearest_ship_mmsi"] == "987654321"
+        assert res.iloc[0]["nearest_ship_distance_km"] == 8.2
+        assert res.iloc[0]["nearby_vessel_count"] == 3
 
 
 class TestTerminalSummary:

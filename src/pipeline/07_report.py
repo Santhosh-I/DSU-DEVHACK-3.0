@@ -233,6 +233,35 @@ def generate_pdf(
                 pdf.cell(w, 6, v, border=1)
             pdf.ln()
 
+        # Vessels Table (Global Fishing Watch)
+        vessels_exist = any(a.get("nearest_ship") for a in attribution_data) if attribution_data else False
+        if vessels_exist:
+            pdf.ln(5)
+            pdf.set_font("Helvetica", "B", 12)
+            pdf.cell(0, 10, "Nearby Vessels Identified (Global Fishing Watch)", ln=1)
+            pdf.set_font("Helvetica", "B", 8)
+            v_widths = [15, 35, 25, 15, 30, 25, 35]
+            v_headers = ["Cluster", "Ship Name", "MMSI", "Flag", "Type", "Distance", "Coordinates"]
+            for w, h in zip(v_widths, v_headers):
+                pdf.cell(w, 7, h, border=1)
+            pdf.ln()
+
+            pdf.set_font("Helvetica", "", 7)
+            for attr in attribution_data:
+                ship = attr.get("nearest_ship")
+                if not ship:
+                    continue
+                cid = str(attr.get("debris_cluster_id", ""))[:4]
+                sname = str(ship.get("ship_name", "Unknown"))[:18]
+                smmsi = str(ship.get("mmsi", "N/A"))[:12]
+                sflag = str(ship.get("flag", "N/A"))[:6]
+                stype = str(ship.get("vessel_type", "N/A"))[:15]
+                sdist = f"{ship.get('distance_km', 0):.1f} km"
+                spos = f"{ship.get('lat', 0):.3f}, {ship.get('lon', 0):.3f}"
+                for w, v in zip(v_widths, [cid, sname, smmsi, sflag, stype, sdist, spos]):
+                    pdf.cell(w, 6, v, border=1)
+                pdf.ln()
+
     # Save
     pdf_path = output_dir / "final_report.pdf"
     pdf.output(str(pdf_path))
@@ -471,7 +500,7 @@ def generate_interactive_map(
             }
         })
         
-        # Add backtracking lines
+        # Add backtracking lines & nearby vessels
         if attribution_data:
             has_real_trajectories = False
             for attr in attribution_data:
@@ -509,6 +538,42 @@ def generate_interactive_map(
                                     "coordinates": [[lon, lat], [slon, slat]]
                                 }
                             })
+
+                    # Add nearest ship point and dashed connection
+                    ship = attr.get("nearest_ship")
+                    if ship and ship.get("lat") is not None and ship.get("lon") is not None:
+                        v_lat = float(ship["lat"])
+                        v_lon = float(ship["lon"])
+                        v_dist = float(ship.get("distance_km", 0))
+                        features.append({
+                            "type": "Feature",
+                            "properties": {
+                                "type": "vessel",
+                                "cluster_id": str(cid),
+                                "ship_name": ship.get("ship_name", "Unknown"),
+                                "vessel_type": ship.get("vessel_type", "Vessel"),
+                                "mmsi": str(ship.get("mmsi", "")),
+                                "flag": str(ship.get("flag", "")),
+                                "distance_km": round(v_dist, 1),
+                            },
+                            "geometry": {
+                                "type": "Point",
+                                "coordinates": [v_lon, v_lat]
+                            }
+                        })
+                        features.append({
+                            "type": "Feature",
+                            "properties": {
+                                "type": "vessel_link",
+                                "cluster_id": str(cid),
+                                "ship_name": ship.get("ship_name", "Unknown"),
+                                "distance_km": round(v_dist, 1),
+                            },
+                            "geometry": {
+                                "type": "LineString",
+                                "coordinates": [[lon, lat], [v_lon, v_lat]]
+                            }
+                        })
                     break
 
     center_lat = filtered_gdf["centroid_lat"].mean()
@@ -543,6 +608,22 @@ def generate_interactive_map(
 
         L.geoJSON(data, {{
             pointToLayer: function (feature, latlng) {{
+                if (feature.properties.type === 'vessel') {{
+                    return L.marker(latlng, {{
+                        icon: L.divIcon({{
+                            html: '<div style="font-size: 20px; line-height: 1; text-align: center;">🚢</div>',
+                            className: 'vessel-marker',
+                            iconSize: [24, 24],
+                            iconAnchor: [12, 12]
+                        }})
+                    }}).bindPopup(
+                        "<b>Ship: " + feature.properties.ship_name + "</b><br>" +
+                        "Type: " + feature.properties.vessel_type + "<br>" +
+                        "MMSI: " + feature.properties.mmsi + "<br>" +
+                        "Flag: " + feature.properties.flag + "<br>" +
+                        "Distance to Debris #" + feature.properties.cluster_id + ": " + feature.properties.distance_km + " km"
+                    );
+                }}
                 return L.circleMarker(latlng, {{
                     radius: 6,
                     fillColor: "#E63946",
@@ -556,10 +637,16 @@ def generate_interactive_map(
                 if (feature.properties.type === 'trajectory') {{
                     return {{color: "#38bdf8", weight: 2, dashArray: "5, 5", opacity: 0.2}};
                 }}
+                if (feature.properties.type === 'vessel_link') {{
+                    return {{color: "#f59e0b", weight: 2, dashArray: "4, 4", opacity: 0.8}};
+                }}
             }},
             onEachFeature: function (feature, layer) {{
                 if (feature.properties.type === 'trajectory') {{
                     layer.bindPopup("Source: " + feature.properties.source);
+                }}
+                if (feature.properties.type === 'vessel_link') {{
+                    layer.bindPopup("Connection to Vessel: " + feature.properties.ship_name + " (" + feature.properties.distance_km + " km)");
                 }}
             }}
         }}).addTo(map);
@@ -614,6 +701,32 @@ def generate_geojson_summary(
             axis=1,
         )
 
+    # Add nearest vessel columns
+    gdf["nearest_ship_name"] = gdf.apply(
+        lambda row: (attr_by_cluster.get(row.get("cluster_id"), {}).get("nearest_ship") or {}).get("ship_name", ""),
+        axis=1,
+    )
+    gdf["nearest_ship_mmsi"] = gdf.apply(
+        lambda row: (attr_by_cluster.get(row.get("cluster_id"), {}).get("nearest_ship") or {}).get("mmsi", ""),
+        axis=1,
+    )
+    gdf["nearest_ship_type"] = gdf.apply(
+        lambda row: (attr_by_cluster.get(row.get("cluster_id"), {}).get("nearest_ship") or {}).get("vessel_type", ""),
+        axis=1,
+    )
+    gdf["nearest_ship_distance_km"] = gdf.apply(
+        lambda row: (attr_by_cluster.get(row.get("cluster_id"), {}).get("nearest_ship") or {}).get("distance_km", None),
+        axis=1,
+    )
+    gdf["nearest_ship_flag"] = gdf.apply(
+        lambda row: (attr_by_cluster.get(row.get("cluster_id"), {}).get("nearest_ship") or {}).get("flag", ""),
+        axis=1,
+    )
+    gdf["nearby_vessel_count"] = gdf.apply(
+        lambda row: attr_by_cluster.get(row.get("cluster_id"), {}).get("nearby_vessel_count", 0),
+        axis=1,
+    )
+
     gdf.to_file(output_path, driver="GeoJSON")
     logger.info("GeoJSON summary saved to %s", output_path)
     return output_path
@@ -643,6 +756,8 @@ def generate_csv(
             "confidence", "top_source_type", "source_lat", "source_lon",
             "top_source_location", "top_source_country", "attribution_score", 
             "detection_date", "scene_id",
+            "nearest_ship_name", "nearest_ship_mmsi", "nearest_ship_type",
+            "nearest_ship_distance_km", "nearest_ship_flag", "nearby_vessel_count",
         ])
         df.to_csv(output_path, index=False)
         return output_path
@@ -658,6 +773,7 @@ def generate_csv(
         cid = det.get("cluster_id", 0)
         attr = attr_by_cluster.get(cid, {})
         s_cent = attr.get("source_centroid", [None, None])
+        ship = attr.get("nearest_ship") or {}
 
         rows.append({
             "cluster_id": cid,
@@ -674,6 +790,12 @@ def generate_csv(
             "attribution_score": attr.get("attribution_score", 0),
             "detection_date": det.get("detection_date", ""),
             "scene_id": scene_id,
+            "nearest_ship_name": ship.get("ship_name", ""),
+            "nearest_ship_mmsi": ship.get("mmsi", ""),
+            "nearest_ship_type": ship.get("vessel_type", ""),
+            "nearest_ship_distance_km": ship.get("distance_km", ""),
+            "nearest_ship_flag": ship.get("flag", ""),
+            "nearby_vessel_count": attr.get("nearby_vessel_count", 0),
         })
 
     df = pd.DataFrame(rows)
@@ -779,6 +901,43 @@ def print_terminal_summary(
                 )
 
             console.print(attr_table)
+
+            # Vessels table from GFW API
+            vessels_found = False
+            vessel_table = Table(
+                title="Nearby Maritime Vessels (Global Fishing Watch API)",
+                show_lines=True,
+                style="yellow",
+            )
+            vessel_table.add_column("Cluster", style="bold")
+            vessel_table.add_column("Nearest Ship", style="cyan bold")
+            vessel_table.add_column("MMSI")
+            vessel_table.add_column("Flag")
+            vessel_table.add_column("Type")
+            vessel_table.add_column("Distance (km)", justify="right")
+            vessel_table.add_column("Position")
+            vessel_table.add_column("Nearby Count", justify="right")
+
+            for attr in attribution_data:
+                cid = attr.get("debris_cluster_id", "")
+                ship = attr.get("nearest_ship")
+                count = attr.get("nearby_vessel_count", 0)
+                if ship:
+                    vessels_found = True
+                    pos_str = f"({ship.get('lat', 0):.3f}, {ship.get('lon', 0):.3f})"
+                    vessel_table.add_row(
+                        f"#{cid}",
+                        str(ship.get("ship_name", "N/A")),
+                        str(ship.get("mmsi", "N/A")),
+                        str(ship.get("flag", "N/A")),
+                        str(ship.get("vessel_type", "N/A")),
+                        f"{ship.get('distance_km', 0):.1f} km",
+                        pos_str,
+                        str(count),
+                    )
+
+            if vessels_found:
+                console.print(vessel_table)
 
     except ImportError:
         # Fallback without rich

@@ -178,3 +178,134 @@ class TestCompositeAttribution:
             weights={"fishing": 0.5, "industrial": 0.5},
         )
         assert result["attribution_score"] == 0.0
+
+
+class TestNearbyShips:
+    """Tests for locating ships near debris clusters using GFW."""
+
+    def test_haversine_distance(self):
+        """Haversine formula should accurately compute distance."""
+        # Approx 1 degree of latitude at equator is ~111.19 km
+        dist = attribute.haversine_km(0.0, 0.0, 1.0, 0.0)
+        assert 110.0 <= dist <= 112.0
+
+    def test_find_ships_near_debris_with_cached_records(self):
+        """Should filter by search radius, rank by distance, and select nearest ship."""
+        cluster_lat = 16.0
+        cluster_lon = -88.0
+
+        records = [
+            {
+                "shipName": "FAR_SHIP",
+                "mmsi": "111111111",
+                "vesselType": "CARGO",
+                "flag": "PAN",
+                "lat": 18.0,
+                "lon": -88.0,
+                "hours": 5.0,
+            },
+            {
+                "shipName": "CLOSE_SHIP",
+                "mmsi": "222222222",
+                "vesselType": "FISHING",
+                "flag": "HND",
+                "lat": 16.08,
+                "lon": -88.05,
+                "hours": 2.5,
+            },
+            {
+                "shipName": "MID_SHIP",
+                "mmsi": "333333333",
+                "vesselType": "TANKER",
+                "flag": "USA",
+                "lat": 16.25,
+                "lon": -88.15,
+                "hours": 1.0,
+            },
+        ]
+
+        result = attribute.find_ships_near_debris(
+            cluster_lat=cluster_lat,
+            cluster_lon=cluster_lon,
+            date_start="2020-09-01",
+            date_end="2020-09-30",
+            search_radius_km=50.0,
+            cached_vessel_records=records,
+        )
+
+        assert result["nearby_vessel_count"] == 2
+        assert len(result["nearby_vessels"]) == 2
+        assert result["nearest_ship"] is not None
+        assert result["nearest_ship"]["ship_name"] == "CLOSE_SHIP"
+        assert result["nearest_ship"]["mmsi"] == "222222222"
+        assert result["nearest_ship"]["vessel_type"] == "FISHING"
+        assert result["nearest_ship"]["distance_km"] < result["nearby_vessels"][1]["distance_km"]
+
+    def test_find_ships_near_debris_no_token_empty(self):
+        """Without token or cached records, should return empty without error."""
+        result = attribute.find_ships_near_debris(
+            cluster_lat=16.0,
+            cluster_lon=-88.0,
+            date_start="2020-09-01",
+            date_end="2020-09-30",
+            gfw_token=None,
+        )
+        assert result["nearest_ship"] is None
+        assert result["nearby_vessels"] == []
+        assert result["nearby_vessel_count"] == 0
+
+    def test_run_generates_attribution_with_ships(self, tmp_path, monkeypatch):
+        """attribute.run() should include nearest_ship and nearby_vessels in output."""
+        import json
+        import geopandas as gpd
+        from shapely.geometry import Point
+
+        det_file = tmp_path / "detections.geojson"
+        gdf = gpd.GeoDataFrame({
+            "geometry": [Point(-88.0, 16.0)],
+            "cluster_id": [101],
+            "area_m2": [1200.0],
+            "centroid_lat": [16.0],
+            "centroid_lon": [-88.0],
+            "polymer_type": ["Marine Debris (Plastic)"],
+        }, crs="EPSG:4326")
+        gdf.to_file(det_file, driver="GeoJSON")
+
+        mock_records = [{
+            "shipName": "SEAS_HUNTER",
+            "mmsi": "312456000",
+            "vesselType": "FISHING",
+            "flag": "BLZ",
+            "lat": 16.1,
+            "lon": -88.05,
+            "hours": 4.2,
+        }]
+
+        monkeypatch.setattr(
+            attribute,
+            "query_gfw_vessels_in_bbox",
+            lambda *args, **kwargs: (mock_records, False)
+        )
+
+        out_path = attribute.run(
+            scene_id="test_scene",
+            sources=[],
+            detections_path=str(det_file),
+            output_dir=str(tmp_path / "attribution"),
+            config={"apis": {"gfw_token": "mock_token"}},
+            detection_date="2020-09-18",
+        )
+
+        assert out_path.exists()
+        with open(out_path) as f:
+            data = json.load(f)
+
+        assert len(data) == 1
+        entry = data[0]
+        assert entry["debris_cluster_id"] == 101
+        assert entry["nearest_ship"] is not None
+        assert entry["nearest_ship"]["ship_name"] == "SEAS_HUNTER"
+        assert entry["nearest_ship"]["mmsi"] == "312456000"
+        assert entry["nearby_vessel_count"] == 1
+        assert "SEAS_HUNTER" in entry["explanation"]
+
