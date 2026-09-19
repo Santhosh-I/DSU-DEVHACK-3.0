@@ -99,9 +99,9 @@ export async function loadDebrisSummaryCsv(runId: string): Promise<DebrisSummary
     const res = await fetch(`${getBase(runId)}/reports/${sceneId}/debris_summary.csv`);
     if (!res.ok) return [];
     const text = await res.text();
-    const lines = text.trim().split("\n");
+    const lines = text.trim().split(/\r?\n/);
     if (lines.length <= 1) return [];
-    const headers = lines[0].split(",");
+    const headers = lines[0].split(",").map((h) => h.trim());
   
   return lines.slice(1).map((line) => {
     const values = line.split(",");

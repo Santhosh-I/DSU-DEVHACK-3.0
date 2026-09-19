@@ -56,6 +56,12 @@ export interface DetectionProperties {
   attribution_score?: string;
   explanation?: string;
   country?: string;
+  nearest_ship_name?: string;
+  nearest_ship_mmsi?: string;
+  nearest_ship_type?: string;
+  nearest_ship_distance_km?: number;
+  nearest_ship_flag?: string;
+  nearby_vessel_count?: number;
 }
 
 export interface DetectionFeature {
@@ -70,6 +76,25 @@ export interface DetectionFeature {
 export interface DetectionFeatureCollection {
   type: "FeatureCollection";
   features: DetectionFeature[];
+}
+
+// ─── Nearby Vessel (Global Fishing Watch) ───
+export interface NearbyVessel {
+  ship_name: string;
+  shipname?: string;
+  mmsi: string;
+  imo?: string;
+  callsign?: string;
+  flag: string;
+  vessel_type: string;
+  geartype?: string;
+  distance_km: number;
+  lat: number;
+  lon: number;
+  hours?: number;
+  fishing_hours?: number;
+  last_timestamp?: string;
+  vessel_id?: string;
 }
 
 // ─── Attribution ───
@@ -91,9 +116,23 @@ export interface AttributionEntry {
   shipping_score: number;
   river_score: number;
   vessel_ids: string[];
+  cluster_centroid?: [number, number];
+  cluster_area_m2?: number;
+  polymer_type?: string;
+  nearest_ship?: NearbyVessel | null;
+  nearby_vessels?: NearbyVessel[];
+  nearby_vessel_count?: number;
 }
 
 // ─── Backtrack Summary ───
+export interface BacktrackDiagnostics {
+  trajectory_mean_length_km?: number;
+  average_drift_speed_ms?: number;
+  ensemble_velocity_std_ms?: number;
+  trajectory_smoothness_index?: number;
+  forcing_data_completeness_pct?: number;
+}
+
 export interface BacktrackEntry {
   source_centroid: [number, number];
   source_bbox: [number, number, number, number];
@@ -101,6 +140,9 @@ export interface BacktrackEntry {
   n_particles: number;
   cluster_id: number;
   days_to_source: number;
+  release_lat?: number;
+  release_lon?: number;
+  diagnostics?: BacktrackDiagnostics;
 }
 
 // ─── Run Metadata (attribution config) ───
@@ -132,6 +174,12 @@ export interface DebrisSummaryRow {
   attribution_score: number;
   detection_date: string;
   scene_id: string;
+  nearest_ship_name?: string;
+  nearest_ship_mmsi?: string | number;
+  nearest_ship_type?: string;
+  nearest_ship_distance_km?: number;
+  nearest_ship_flag?: string;
+  nearby_vessel_count?: number;
 }
 
 // ─── Ingest Metadata ───

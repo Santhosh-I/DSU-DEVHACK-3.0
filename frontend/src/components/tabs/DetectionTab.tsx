@@ -259,6 +259,40 @@ const DetectionTab: React.FC<DetectionTabProps> = ({ runId }) => {
                   <span className="font-medium capitalize">{selected.properties.source_type}</span>
                 </div>
               )}
+              {selected.properties.nearest_ship_name && (
+                <div className="pt-2 mt-2 border-t border-border/30 space-y-1">
+                  <div className="text-[11px] font-semibold text-sky-400 flex items-center gap-1">
+                    <span>🚢</span>
+                    <span>Nearest Ship (GFW)</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Vessel</span>
+                    <span className="font-medium truncate max-w-[120px]" title={selected.properties.nearest_ship_name}>
+                      {selected.properties.nearest_ship_name}
+                    </span>
+                  </div>
+                  {selected.properties.nearest_ship_distance_km != null && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Distance</span>
+                      <span className="font-semibold text-sky-400">
+                        {selected.properties.nearest_ship_distance_km.toFixed(1)} km
+                      </span>
+                    </div>
+                  )}
+                  {selected.properties.nearest_ship_type && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Type</span>
+                      <span className="capitalize">{selected.properties.nearest_ship_type}</span>
+                    </div>
+                  )}
+                  {selected.properties.nearest_ship_mmsi && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">MMSI</span>
+                      <span className="font-mono">{selected.properties.nearest_ship_mmsi}</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}

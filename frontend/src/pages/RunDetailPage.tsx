@@ -36,6 +36,7 @@ import DetectionTab from "@/components/tabs/DetectionTab";
 import AttributionTab from "@/components/tabs/AttributionTab";
 import AnalyticsTab from "@/components/tabs/AnalyticsTab";
 import ReportsTab from "@/components/tabs/ReportsTab";
+import ErrorBoundary from "@/components/ErrorBoundary";
 
 const TABS = [
   { key: "overview", label: "Overview", icon: ClipboardList },
@@ -198,26 +199,27 @@ const RunDetailPage: React.FC = () => {
         </div>
 
         {/* Tab content */}
-        <motion.div key={activeTab} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
-          {activeTab === "overview" && (
-            <OverviewTab run={run} summary={summary} csv={csv} />
-          )}
+        <ErrorBoundary fallbackTitle={`Error in ${activeTab} tab`}>
+          <motion.div key={activeTab} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+            {activeTab === "overview" && (
+              <OverviewTab run={run} summary={summary} csv={csv} />
+            )}
 
-          {activeTab === "detection" && (
-            <DetectionTab runId={runId} />
-          )}
+            {activeTab === "detection" && (
+              <DetectionTab runId={runId} />
+            )}
 
-          {activeTab === "attribution" && (
-            <AttributionTab runId={runId} />
-          )}
+            {activeTab === "attribution" && (
+              <AttributionTab runId={runId} />
+            )}
 
-          {activeTab === "analytics" && (
-            <AnalyticsTab runId={runId} />
-          )}
+            {activeTab === "analytics" && (
+              <AnalyticsTab runId={runId} />
+            )}
 
-          {activeTab === "reports" && (
-            <ReportsTab runId={runId} />
-          )}
+            {activeTab === "reports" && (
+              <ReportsTab runId={runId} />
+            )}
 
           {activeTab === "raw" && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -237,7 +239,8 @@ const RunDetailPage: React.FC = () => {
               )}
             </div>
           )}
-        </motion.div>
+          </motion.div>
+        </ErrorBoundary>
       </div>
     </div>
   );

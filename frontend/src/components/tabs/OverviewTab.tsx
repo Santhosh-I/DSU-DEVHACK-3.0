@@ -113,6 +113,9 @@ const OverviewTab: React.FC<OverviewTabProps> = ({ run, summary, csv }) => {
               { label: "False Positive Rate", value: `${fpRate}%` },
               { label: "CRS", value: "EPSG:32616" },
               { label: "Avg Confidence", value: csv.length > 0 ? (csv.reduce((a, r) => a + r.confidence, 0) / csv.length).toFixed(3) : "N/A" },
+              ...(csv.some((r) => r.nearest_ship_name || r.nearest_ship_mmsi)
+                ? [{ label: "Clusters Near AIS Ships", value: `${csv.filter((r) => r.nearest_ship_name || r.nearest_ship_mmsi).length} clusters` }]
+                : []),
               { label: "Pipeline Time", value: `${summary.elapsed_seconds}s` },
             ].map((item) => (
               <div key={item.label} className="flex items-center justify-between text-sm">

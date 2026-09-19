@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { motion } from "framer-motion";
-import { MapContainer, TileLayer, CircleMarker, Rectangle, Polyline, Popup, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, CircleMarker, Rectangle, Polyline, Popup, Marker, useMap } from "react-leaflet";
 import L from "leaflet";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { loadAttribution, loadBacktrackSummary, loadRunMetadata, loadRunSummary, loadAllBacktrackGeoJsons, loadDebrisSummaryCsv } from "@/services/dataService";
@@ -17,7 +17,43 @@ import {
   Pause,
   RotateCcw,
   Sparkles,
+  Ship,
+  Navigation,
+  Anchor,
+  Radio,
 } from "lucide-react";
+
+function getFlagEmoji(countryCode?: string): string {
+  if (!countryCode || countryCode.length < 2) return "🌐";
+  const code = countryCode.toUpperCase();
+  const codeMap: Record<string, string> = {
+    USA: "US", ESP: "ES", ITA: "IT", HND: "HN", BLZ: "BZ", PAN: "PA",
+    LKA: "LK", CHN: "CN", JPN: "JP", GBR: "GB", FRA: "FR", DEU: "DE",
+    NOR: "NO", RUS: "RU", MEX: "MX", COL: "CO", BRA: "BR", IND: "IN",
+  };
+  const alpha2 = codeMap[code] || (code.length === 2 ? code : "");
+  if (!alpha2) return code;
+  const codePoints = alpha2
+    .split("")
+    .map((c) => 127397 + c.charCodeAt(0));
+  return String.fromCodePoint(...codePoints);
+}
+
+const shipIcon = L.divIcon({
+  className: "custom-ship-marker",
+  html: `<div style="background-color: #0284c7; color: white; border-radius: 50%; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 0 8px rgba(2,132,199,0.8); font-size: 14px; line-height: 22px; text-align: center;">🚢</div>`,
+  iconSize: [26, 26],
+  iconAnchor: [13, 13],
+  popupAnchor: [0, -13],
+});
+
+const secondaryShipIcon = L.divIcon({
+  className: "custom-secondary-ship-marker",
+  html: `<div style="background-color: #0d9488; color: white; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 0 6px rgba(13,148,136,0.8); font-size: 11px; line-height: 18px; text-align: center;">🚢</div>`,
+  iconSize: [22, 22],
+  iconAnchor: [11, 11],
+  popupAnchor: [0, -11],
+});
 
 const SCORE_COLORS = {
   fishing: "#3B82F6",
@@ -48,12 +84,22 @@ const TILE_LAYERS = {
 function FitBacktrackBounds({ backtrack }: { backtrack: BacktrackEntry[] }) {
   const map = useMap();
   useEffect(() => {
-    if (backtrack && backtrack.length > 0) {
+    if (backtrack && Array.isArray(backtrack) && backtrack.length > 0) {
       const bounds = L.latLngBounds([]);
       backtrack.forEach((bt) => {
-        bounds.extend([bt.source_centroid[1], bt.source_centroid[0]]);
-        bounds.extend([bt.source_bbox[1], bt.source_bbox[0]]);
-        bounds.extend([bt.source_bbox[3], bt.source_bbox[2]]);
+        if (bt.source_centroid && Array.isArray(bt.source_centroid) && bt.source_centroid.length >= 2) {
+          if (Number.isFinite(bt.source_centroid[1]) && Number.isFinite(bt.source_centroid[0])) {
+            bounds.extend([bt.source_centroid[1], bt.source_centroid[0]]);
+          }
+        }
+        if (bt.source_bbox && Array.isArray(bt.source_bbox) && bt.source_bbox.length >= 4) {
+          if (Number.isFinite(bt.source_bbox[1]) && Number.isFinite(bt.source_bbox[0])) {
+            bounds.extend([bt.source_bbox[1], bt.source_bbox[0]]);
+          }
+          if (Number.isFinite(bt.source_bbox[3]) && Number.isFinite(bt.source_bbox[2])) {
+            bounds.extend([bt.source_bbox[3], bt.source_bbox[2]]);
+          }
+        }
       });
       if (bounds.isValid()) {
         map.fitBounds(bounds, { padding: [50, 50] });
@@ -90,6 +136,7 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
   const [showBacktrackPaths, setShowBacktrackPaths] = useState(true);
   const [showSourceRegions, setShowSourceRegions] = useState(true);
   const [showNonBacktracked, setShowNonBacktracked] = useState(true);
+  const [showNearbyShips, setShowNearbyShips] = useState(true);
 
   useEffect(() => {
     Promise.all([
@@ -100,19 +147,22 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
       loadDebrisSummaryCsv(runId)
     ]).then(
       async ([attr, bt, meta, summary, csvData]) => {
-        setAttribution(attr);
-        setBacktrack(bt);
-        setMetadata(meta);
-        setTargetDate(summary.target_date);
-        setCsv(csvData);
+        setAttribution(attr || []);
+        setBacktrack(bt || []);
+        setMetadata(meta || null);
+        setTargetDate(summary?.target_date || null);
+        setCsv(csvData || []);
 
-        const clusterIds = bt.map((b) => b.cluster_id);
+        const clusterIds = (bt || []).map((b) => b.cluster_id);
         const geoJsons = await loadAllBacktrackGeoJsons(clusterIds, runId);
-        setBacktrackGeoJsons(geoJsons);
+        setBacktrackGeoJsons(geoJsons || {});
 
         setLoading(false);
       }
-    );
+    ).catch((err) => {
+      console.error("Failed to load attribution tab data:", err);
+      setLoading(false);
+    });
   }, [runId]);
 
   // Animation Loop
@@ -163,13 +213,44 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
     return lines;
   }, [backtrackGeoJsons, animProgress, selectedCluster]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-      </div>
+  const clusterCoords = useMemo(() => {
+    const map: Record<number, [number, number]> = {};
+    (csv || []).forEach((r) => {
+      if (Number.isFinite(r.lat) && Number.isFinite(r.lon)) {
+        map[r.cluster_id] = [r.lat, r.lon];
+      }
+    });
+    (backtrack || []).forEach((b) => {
+      if (!map[b.cluster_id]) {
+        const lat = b.release_lat ?? (b.source_centroid ? b.source_centroid[1] : undefined);
+        const lon = b.release_lon ?? (b.source_centroid ? b.source_centroid[0] : undefined);
+        if (Number.isFinite(lat) && Number.isFinite(lon)) {
+          map[b.cluster_id] = [lat!, lon!];
+        }
+      }
+    });
+    return map;
+  }, [csv, backtrack]);
+
+  const nonBacktrackedPlastics = useMemo(() => {
+    return (csv || []).filter(
+      (row) =>
+        row.polymer_type === "Marine Debris (Plastic)" &&
+        Number.isFinite(row.lat) &&
+        Number.isFinite(row.lon) &&
+        !(backtrack || []).some((bt) => bt.cluster_id === row.cluster_id)
     );
-  }
+  }, [csv, backtrack]);
+
+  const scoreData = useMemo(() => {
+    return (attribution || []).map((a) => ({
+      name: `#${a.debris_cluster_id}`,
+      fishing: parseFloat(((a.fishing_score || 0) * 100).toFixed(1)),
+      industrial: parseFloat(((a.industrial_score || 0) * 100).toFixed(1)),
+      shipping: parseFloat(((a.shipping_score || 0) * 100).toFixed(1)),
+      river: parseFloat(((a.river_score || 0) * 100).toFixed(1)),
+    }));
+  }, [attribution]);
 
   const handleBacktrack = async (clusterId: number) => {
     setBacktrackingIds(prev => new Set(prev).add(clusterId));
@@ -179,11 +260,11 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
       setTimeout(() => {
         Promise.all([loadAttribution(runId), loadBacktrackSummary(runId)]).then(
           async ([attr, bt]) => {
-            setAttribution(attr);
-            setBacktrack(bt);
-            const clusterIds = bt.map((b) => b.cluster_id);
+            setAttribution(attr || []);
+            setBacktrack(bt || []);
+            const clusterIds = (bt || []).map((b) => b.cluster_id);
             const geoJsons = await loadAllBacktrackGeoJsons(clusterIds, runId);
-            setBacktrackGeoJsons(geoJsons);
+            setBacktrackGeoJsons(geoJsons || {});
             setBacktrackingIds(prev => {
               const next = new Set(prev);
               next.delete(clusterId);
@@ -202,17 +283,13 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
     }
   };
 
-  const nonBacktrackedPlastics = csv.filter(
-    (row) => row.polymer_type === "Marine Debris (Plastic)" && !backtrack.some((bt) => bt.cluster_id === row.cluster_id)
-  );
-
-  const scoreData = attribution.map((a) => ({
-    name: `#${a.debris_cluster_id}`,
-    fishing: parseFloat((a.fishing_score * 100).toFixed(1)),
-    industrial: parseFloat((a.industrial_score * 100).toFixed(1)),
-    shipping: parseFloat((a.shipping_score * 100).toFixed(1)),
-    river: parseFloat((a.river_score * 100).toFixed(1)),
-  }));
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   const confColor = (c: string) =>
     c === "high" ? "text-emerald-400 bg-emerald-500/15" : c === "medium" ? "text-yellow-400 bg-yellow-500/15" : "text-red-400 bg-red-500/15";
@@ -316,83 +393,183 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
                 ) : null
               )}
 
-            {showSourceRegions && backtrack.map((bt) => (
-              <Rectangle
-                key={`bbox-${bt.cluster_id}`}
-                bounds={[
-                  [bt.source_bbox[1], bt.source_bbox[0]],
-                  [bt.source_bbox[3], bt.source_bbox[2]],
-                ]}
-                pathOptions={{
-                  color: "#F59E0B",
-                  weight: 1.8,
-                  fillColor: "#F59E0B",
-                  fillOpacity: 0.12,
-                  dashArray: "4 4",
-                }}
-              >
-                <Popup>
-                  <div className="text-xs">
-                    <strong>Source Area for Cluster #{bt.cluster_id}</strong><br />
-                    BBox: [{bt.source_bbox.join(", ")}]<br />
-                    Probability: {(bt.source_probability * 100).toFixed(1)}%
-                  </div>
-                </Popup>
-              </Rectangle>
-            ))}
+            {showSourceRegions &&
+              (backtrack || []).map((bt) => {
+                if (!bt.source_bbox || !Array.isArray(bt.source_bbox) || bt.source_bbox.length < 4) return null;
+                const [bLon1, bLat1, bLon2, bLat2] = bt.source_bbox;
+                if (!Number.isFinite(bLat1) || !Number.isFinite(bLon1) || !Number.isFinite(bLat2) || !Number.isFinite(bLon2)) return null;
+                return (
+                  <Rectangle
+                    key={`bbox-${bt.cluster_id}`}
+                    bounds={[
+                      [bLat1, bLon1],
+                      [bLat2, bLon2],
+                    ]}
+                    pathOptions={{
+                      color: "#F59E0B",
+                      weight: 1.8,
+                      fillColor: "#F59E0B",
+                      fillOpacity: 0.12,
+                      dashArray: "4 4",
+                    }}
+                  >
+                    <Popup>
+                      <div className="text-xs">
+                        <strong>Source Area for Cluster #{bt.cluster_id}</strong><br />
+                        BBox: [{bt.source_bbox.join(", ")}]<br />
+                        Probability: {((bt.source_probability || 0) * 100).toFixed(1)}%
+                      </div>
+                    </Popup>
+                  </Rectangle>
+                );
+              })}
 
-            {showDebrisPoints && backtrack.map((bt) => (
-              <CircleMarker
-                key={`cluster-${bt.cluster_id}`}
-                center={[bt.release_lat || bt.source_centroid[1], bt.release_lon || bt.source_centroid[0]]}
-                radius={8}
-                pathOptions={{
-                  color: "#FFFFFF",
-                  fillColor: "#EF4444",
-                  fillOpacity: 0.9,
-                  weight: 2,
-                }}
-              >
-                <Popup>
-                  <div className="text-xs">
-                    <strong>Debris Cluster #{bt.cluster_id}</strong><br />
-                    Particles Tracked: {bt.n_particles}<br />
-                    Backtrack Duration: {bt.days_to_source} Days
-                  </div>
-                </Popup>
-              </CircleMarker>
-            ))}
+            {showDebrisPoints &&
+              (backtrack || []).map((bt) => {
+                const lat = bt.release_lat ?? (bt.source_centroid ? bt.source_centroid[1] : undefined);
+                const lon = bt.release_lon ?? (bt.source_centroid ? bt.source_centroid[0] : undefined);
+                if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+                return (
+                  <CircleMarker
+                    key={`cluster-${bt.cluster_id}`}
+                    center={[lat!, lon!]}
+                    radius={8}
+                    pathOptions={{
+                      color: "#FFFFFF",
+                      fillColor: "#EF4444",
+                      fillOpacity: 0.9,
+                      weight: 2,
+                    }}
+                  >
+                    <Popup>
+                      <div className="text-xs">
+                        <strong>Debris Cluster #{bt.cluster_id}</strong><br />
+                        Particles Tracked: {bt.n_particles || "—"}<br />
+                        Backtrack Duration: {bt.days_to_source || "—"} Days
+                      </div>
+                    </Popup>
+                  </CircleMarker>
+                );
+              })}
 
-            {showNonBacktracked && nonBacktrackedPlastics.map((row) => (
-              <CircleMarker
-                key={`nb-cluster-${row.cluster_id}`}
-                center={[row.lat, row.lon]}
-                radius={7}
-                pathOptions={{
-                  color: "#FFFFFF",
-                  fillColor: "#6B7280",
-                  fillOpacity: 0.7,
-                  weight: 1.5,
-                  dashArray: "2 2",
-                }}
-              >
-                <Popup>
-                  <div className="text-xs flex flex-col gap-2 p-1">
-                    <div>
-                      <strong>Debris Cluster #{row.cluster_id}</strong><br />
-                      Not Backtracked
-                    </div>
-                    <button 
-                      onClick={() => handleBacktrack(row.cluster_id)}
-                      disabled={backtrackingIds.has(row.cluster_id)}
-                      className="px-3 py-1.5 bg-primary text-primary-foreground rounded text-xs font-semibold disabled:opacity-50"
-                    >
-                      {backtrackingIds.has(row.cluster_id) ? "Backtracking..." : "Backtrack this cluster"}
-                    </button>
-                  </div>
-                </Popup>
-              </CircleMarker>
-            ))}
+            {showNonBacktracked &&
+              nonBacktrackedPlastics.map((row) => {
+                if (!Number.isFinite(row.lat) || !Number.isFinite(row.lon)) return null;
+                return (
+                  <CircleMarker
+                    key={`nb-cluster-${row.cluster_id}`}
+                    center={[row.lat, row.lon]}
+                    radius={7}
+                    pathOptions={{
+                      color: "#FFFFFF",
+                      fillColor: "#6B7280",
+                      fillOpacity: 0.7,
+                      weight: 1.5,
+                      dashArray: "2 2",
+                    }}
+                  >
+                    <Popup>
+                      <div className="text-xs flex flex-col gap-2 p-1">
+                        <div>
+                          <strong>Debris Cluster #{row.cluster_id}</strong><br />
+                          Not Backtracked
+                        </div>
+                        <button 
+                          onClick={() => handleBacktrack(row.cluster_id)}
+                          disabled={backtrackingIds.has(row.cluster_id)}
+                          className="px-3 py-1.5 bg-primary text-primary-foreground rounded text-xs font-semibold disabled:opacity-50"
+                        >
+                          {backtrackingIds.has(row.cluster_id) ? "Backtracking..." : "Backtrack this cluster"}
+                        </button>
+                      </div>
+                    </Popup>
+                  </CircleMarker>
+                );
+              })}
+
+            {showNearbyShips &&
+              (attribution || []).flatMap((a) => {
+                if (selectedCluster !== null && selectedCluster !== a.debris_cluster_id) return [];
+                const vessels = (a.nearby_vessels && a.nearby_vessels.length > 0)
+                  ? a.nearby_vessels
+                  : (a.nearest_ship ? [a.nearest_ship] : []);
+                const cCoord = clusterCoords[a.debris_cluster_id];
+
+                return vessels.map((ship, vIdx) => {
+                  if (!ship || !Number.isFinite(ship.lat) || !Number.isFinite(ship.lon)) return null;
+                  const isNearest = vIdx === 0 || (a.nearest_ship && (ship.mmsi === a.nearest_ship.mmsi || ship.ship_name === a.nearest_ship.ship_name));
+                  return (
+                    <React.Fragment key={`ship-${a.debris_cluster_id}-${ship.vessel_id || ship.mmsi || vIdx}`}>
+                      {cCoord && Number.isFinite(cCoord[0]) && Number.isFinite(cCoord[1]) && (
+                        <Polyline
+                          positions={[cCoord, [ship.lat, ship.lon]]}
+                          pathOptions={{
+                            color: isNearest ? "#38bdf8" : "#94a3b8",
+                            weight: isNearest ? 1.5 : 1,
+                            dashArray: isNearest ? "4 4" : "2 3",
+                            opacity: isNearest ? 0.8 : 0.45,
+                          }}
+                        />
+                      )}
+                      <Marker position={[ship.lat, ship.lon]} icon={isNearest ? shipIcon : secondaryShipIcon}>
+                        <Popup>
+                          <div className="text-xs p-1 space-y-1.5 min-w-[200px]">
+                            <div className="flex items-center gap-1.5 font-bold text-sm text-foreground">
+                              <span>🚢</span>
+                              <span className="truncate">{ship.ship_name || ship.shipname || "Vessel " + (ship.mmsi || "")}</span>
+                              <span>{getFlagEmoji(ship.flag)}</span>
+                            </div>
+                            <div className="text-muted-foreground text-[11px] flex items-center gap-1.5">
+                              {isNearest ? (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-500/20 text-sky-400">
+                                  Top Suspect (Nearest)
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-500/20 text-teal-400">
+                                  Nearby Vessel #{vIdx + 1}
+                                </span>
+                              )}
+                              <span>Cluster <strong className="text-primary">#{a.debris_cluster_id}</strong></span>
+                            </div>
+                            <div className="border-t border-border/40 pt-1 space-y-0.5 text-[11px]">
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Distance:</span>
+                                <span className="text-sky-400 font-semibold">{ship.distance_km != null ? `${ship.distance_km.toFixed(2)} km` : "Nearby"}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Type:</span>
+                                <span className="capitalize font-medium">{ship.vessel_type || "Vessel"}</span>
+                              </div>
+                              {ship.mmsi && (
+                                <div className="flex justify-between">
+                                  <span className="text-muted-foreground">MMSI:</span>
+                                  <span className="font-mono">{ship.mmsi}</span>
+                                </div>
+                              )}
+                              {ship.imo && (
+                                <div className="flex justify-between">
+                                  <span className="text-muted-foreground">IMO:</span>
+                                  <span className="font-mono">{ship.imo}</span>
+                                </div>
+                              )}
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Flag:</span>
+                                <span>{ship.flag || "Unknown"} {getFlagEmoji(ship.flag)}</span>
+                              </div>
+                              {(ship.hours ?? ship.fishing_hours) !== undefined && (ship.hours ?? ship.fishing_hours)! > 0 && (
+                                <div className="flex justify-between">
+                                  <span className="text-muted-foreground">Activity:</span>
+                                  <span>{(ship.hours ?? ship.fishing_hours)!.toFixed(1)} hrs</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </Popup>
+                      </Marker>
+                    </React.Fragment>
+                  );
+                });
+              })}
           </MapContainer>
 
           {/* Map Legend & Layer Toggles */}
@@ -416,6 +593,11 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
               <input type="checkbox" className="accent-primary w-3.5 h-3.5 rounded bg-background/50 border-border/50" checked={showNonBacktracked} onChange={(e) => setShowNonBacktracked(e.target.checked)} />
               <div className="w-3 h-3 rounded-full bg-gray-500 border border-white border-dashed" />
               <span className="text-foreground font-medium select-none">Non-Backtracked Plastic</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity">
+              <input type="checkbox" className="accent-primary w-3.5 h-3.5 rounded bg-background/50 border-border/50" checked={showNearbyShips} onChange={(e) => setShowNearbyShips(e.target.checked)} />
+              <span className="text-xs">🚢</span>
+              <span className="text-foreground font-medium select-none">Nearby Vessels (GFW)</span>
             </label>
           </div>
         </div>
@@ -484,6 +666,7 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
                 <tr className="border-b border-border/20 text-muted-foreground">
                   <th className="text-left px-4 py-3 font-medium">Cluster</th>
                   <th className="text-left px-4 py-3 font-medium">Source</th>
+                  <th className="text-left px-4 py-3 font-medium">Nearest Ship (GFW)</th>
                   <th className="text-left px-4 py-3 font-medium">Location</th>
                   <th className="text-left px-4 py-3 font-medium">Country</th>
                   <th className="text-left px-4 py-3 font-medium">Score</th>
@@ -506,6 +689,27 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
                           <span>{SOURCE_ICONS[a.source_type] || "❓"}</span>
                           <span className="capitalize">{a.source_type}</span>
                         </span>
+                      </td>
+                      <td className="px-4 py-3 text-xs">
+                        {a.nearest_ship ? (
+                          <div className="flex flex-col">
+                            <span className="font-semibold text-foreground flex items-center gap-1.5">
+                              <span>{getFlagEmoji(a.nearest_ship.flag)}</span>
+                              <span className="truncate max-w-[130px]" title={a.nearest_ship.ship_name || a.nearest_ship.shipname || ""}>
+                                {a.nearest_ship.ship_name || a.nearest_ship.shipname || "MMSI " + a.nearest_ship.mmsi}
+                              </span>
+                            </span>
+                            <span className="text-muted-foreground text-[11px] flex items-center gap-1">
+                              <span className="text-sky-400 font-medium">
+                                {a.nearest_ship.distance_km != null ? `${a.nearest_ship.distance_km.toFixed(1)} km` : "Nearby"}
+                              </span>
+                              <span>&bull;</span>
+                              <span className="capitalize">{a.nearest_ship.vessel_type || "vessel"}</span>
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground text-xs italic">None detected</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground text-xs">{a.location_name}</td>
                       <td className="px-4 py-3 text-muted-foreground text-xs">{a.country}</td>
@@ -532,8 +736,95 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
                     </tr>
                     {expandedId === a.debris_cluster_id && (
                       <tr>
-                        <td colSpan={7} className="px-4 py-3 bg-muted/10">
-                          <p className="text-sm text-muted-foreground leading-relaxed">{a.explanation}</p>
+                        <td colSpan={8} className="px-4 py-4 bg-muted/10 space-y-3">
+                          {a.nearest_ship && (
+                            <div className="p-3.5 rounded-lg bg-sky-950/30 border border-sky-500/20 mb-3">
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  <Ship className="w-4 h-4 text-sky-400" />
+                                  <span className="font-semibold text-sm text-foreground">
+                                    Nearest Maritime Vessel (Global Fishing Watch API)
+                                  </span>
+                                </div>
+                                <span className="text-xs px-2 py-0.5 rounded bg-sky-500/10 text-sky-300 font-mono">
+                                  {a.nearby_vessels?.length || 1} vessel{(a.nearby_vessels?.length || 1) > 1 ? "s" : ""} in range
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                                <div className="p-2 bg-background/40 rounded border border-border/20">
+                                  <span className="text-muted-foreground text-[11px] block">Vessel Name</span>
+                                  <span className="font-semibold text-foreground flex items-center gap-1 truncate">
+                                    {getFlagEmoji(a.nearest_ship.flag)} {a.nearest_ship.ship_name || a.nearest_ship.shipname || "Unidentified"}
+                                  </span>
+                                </div>
+                                <div className="p-2 bg-background/40 rounded border border-border/20">
+                                  <span className="text-muted-foreground text-[11px] block">Distance to Cluster</span>
+                                  <span className="font-semibold text-sky-400">
+                                    {a.nearest_ship.distance_km != null ? `${a.nearest_ship.distance_km.toFixed(2)} km` : "N/A"}
+                                  </span>
+                                </div>
+                                <div className="p-2 bg-background/40 rounded border border-border/20">
+                                  <span className="text-muted-foreground text-[11px] block">Vessel Type</span>
+                                  <span className="font-semibold capitalize text-foreground">
+                                    {a.nearest_ship.vessel_type || "Fishing"}
+                                  </span>
+                                </div>
+                                <div className="p-2 bg-background/40 rounded border border-border/20">
+                                  <span className="text-muted-foreground text-[11px] block">Identifiers</span>
+                                  <span className="font-mono text-[11px] text-foreground truncate block">
+                                    {a.nearest_ship.mmsi ? `MMSI: ${a.nearest_ship.mmsi}` : ""}
+                                    {a.nearest_ship.imo ? ` | IMO: ${a.nearest_ship.imo}` : ""}
+                                    {!a.nearest_ship.mmsi && !a.nearest_ship.imo ? "N/A" : ""}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {a.nearby_vessels && a.nearby_vessels.length > 1 && (
+                                <div className="mt-3 pt-2.5 border-t border-border/20">
+                                  <span className="text-xs font-medium text-muted-foreground mb-1.5 block">
+                                    All Vessels Identified Around Cluster #{a.debris_cluster_id}:
+                                  </span>
+                                  <div className="max-h-36 overflow-y-auto">
+                                    <table className="w-full text-xs">
+                                      <thead>
+                                        <tr className="text-muted-foreground border-b border-border/20">
+                                          <th className="text-left py-1 font-medium">Vessel</th>
+                                          <th className="text-left py-1 font-medium">Type</th>
+                                          <th className="text-left py-1 font-medium">Flag</th>
+                                          <th className="text-left py-1 font-medium">Distance</th>
+                                          <th className="text-left py-1 font-medium">MMSI</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {a.nearby_vessels.map((v, vIdx) => (
+                                          <tr key={v.vessel_id || v.mmsi || vIdx} className="border-b border-border/10">
+                                            <td className="py-1 font-medium flex items-center gap-1">
+                                              <span>{getFlagEmoji(v.flag)}</span>
+                                              <span className="truncate max-w-[120px]">{v.ship_name || v.shipname || "Vessel " + (v.mmsi || "")}</span>
+                                            </td>
+                                            <td className="py-1 capitalize text-muted-foreground">{v.vessel_type || "vessel"}</td>
+                                            <td className="py-1">{v.flag || "—"}</td>
+                                            <td className="py-1 text-sky-400 font-mono">
+                                              {v.distance_km != null ? `${v.distance_km.toFixed(2)} km` : "—"}
+                                            </td>
+                                            <td className="py-1 font-mono text-muted-foreground">{v.mmsi || "—"}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          <div>
+                            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-1">
+                              Source Attribution Assessment
+                            </span>
+                            <p className="text-sm text-muted-foreground leading-relaxed">{a.explanation}</p>
+                          </div>
                         </td>
                       </tr>
                     )}
@@ -586,13 +877,13 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
               <h3 className="font-heading font-semibold mb-4">Backtrack Configuration</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 {[
-                  { icon: Database, label: "Ocean Data", value: metadata.cmems_product.split("_").slice(-2).join("_") },
-                  { icon: Wind, label: "Wind Data", value: "ERA5 (u10, v10)" },
-                  { icon: Cpu, label: "Integrator", value: metadata.integrator },
-                  { icon: Cpu, label: "Time Step", value: `${metadata.time_step_hours}h` },
-                  { icon: GitBranch, label: "Particles", value: `${metadata.n_particles} per cluster` },
-                  { icon: GitBranch, label: "Duration", value: `${metadata.bt_days} days` },
-                  { icon: Cpu, label: "Diffusion (Kh)", value: metadata.horizontal_diffusion_kh.toString() },
+                  { icon: Database, label: "Ocean Data", value: metadata.cmems_product ? metadata.cmems_product.split("_").slice(-2).join("_") : "N/A" },
+                  { icon: Wind, label: "Wind Data", value: metadata.era5_product || "ERA5 (u10, v10)" },
+                  { icon: Cpu, label: "Integrator", value: metadata.integrator || "RK4" },
+                  { icon: Cpu, label: "Time Step", value: metadata.time_step_hours != null ? `${metadata.time_step_hours}h` : "N/A" },
+                  { icon: GitBranch, label: "Particles", value: metadata.n_particles != null ? `${metadata.n_particles} per cluster` : "N/A" },
+                  { icon: GitBranch, label: "Duration", value: metadata.bt_days != null ? `${metadata.bt_days} days` : "N/A" },
+                  { icon: Cpu, label: "Diffusion (Kh)", value: metadata.horizontal_diffusion_kh != null ? metadata.horizontal_diffusion_kh.toString() : "N/A" },
                 ].map((item) => {
                   const Icon = item.icon;
                   return (
@@ -609,7 +900,7 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
               <div className="mt-4">
                 <div className="text-xs text-muted-foreground mb-2">Kernels</div>
                 <div className="flex flex-wrap gap-2">
-                  {metadata.kernels.map((k) => (
+                  {(metadata.kernels || []).map((k) => (
                     <span key={k} className="px-2.5 py-1 bg-primary/10 text-primary rounded-md text-xs font-medium">
                       {k}
                     </span>

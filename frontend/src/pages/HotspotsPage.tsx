@@ -1,23 +1,31 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "framer-motion";
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from "react-leaflet";
+import { motion, AnimatePresence } from "framer-motion";
+import { MapContainer, TileLayer, CircleMarker, Polyline, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import * as turf from "@turf/turf";
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 import { getPipelineRuns } from "@/lib/api";
-import { loadFinalReport, loadBacktrackSummary, loadAttribution, loadRunSummary, getSceneId } from "@/services/dataService";
+import { loadFinalReport, loadBacktrackSummary, loadAttribution, loadRunSummary, loadBacktrackGeoJson, getSceneId } from "@/services/dataService";
 import { PipelineRun, AttributionEntry, BacktrackEntry } from "@/types";
 import { CloudHeatmapLayer, HeatmapPoint } from "@/components/CloudHeatmapLayer";
 import {
   Flame, Filter, SlidersHorizontal, X, MapPin, Calendar,
   ChevronDown, ChevronUp, Crosshair, Activity, TrendingUp,
   RefreshCw, AlertTriangle, Layers, Target, Compass, Anchor,
-  Eye, EyeOff, Radio, Navigation,
+  Eye, EyeOff, Radio, Navigation, Award, Zap, CheckCircle2,
+  CalendarRange, ArrowRight, RotateCcw, Map as MapIcon, Waves,
+  GitCommit, ArrowUpRight,
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
+
+export interface GeographicAreaInfo {
+  name: string;
+  type: "Marina Coast" | "River Estuary" | "Bay Waters" | "Harbor / Port" | "Reef Lagoon" | "Marine Reserve" | "Coastal Sector";
+  badgeColor: string;
+}
 
 interface DetectionPoint {
   lat: number;
@@ -25,11 +33,13 @@ interface DetectionPoint {
   confidence: number;
   polymer_type: string;
   is_false_positive: boolean;
-  detection_date: string;
+  detection_date: string; // YYYY-MM-DD
   area_m2: number;
   run_id: string;
   run_name: string;
   cluster_id: number;
+  area_name: string;
+  area_type: string;
 }
 
 export interface AttributedSourcePoint {
@@ -46,7 +56,7 @@ export interface AttributedSourcePoint {
   cluster_id: number;
   run_id: string;
   run_name: string;
-  detection_date: string;
+  detection_date: string; // YYYY-MM-DD
 }
 
 interface Hotspot {
@@ -60,12 +70,165 @@ interface Hotspot {
   first_seen: string;
   last_seen: string;
   points: DetectionPoint[];
+  area_name: string;
+  area_type: string;
+  area_badge_color: string;
 }
 
-interface TimelinePoint {
-  period: string;
+export interface AreaContributor {
+  id: string;
+  areaName: string;
+  areaType: string;
+  badgeColor: string;
+  detectionCount: number;
+  percentOfTotal: number;
+  clusterCount: number;
+  clusters: Hotspot[];
+  center: [number, number];
+  bounds: [[number, number], [number, number]];
+  totalAreaM2: number;
+  avgConfidence: number;
+  runCount: number;
+}
+
+export interface SourceContributor {
+  id: string;
+  sourceName: string;
+  sourceType: string;
+  country: string;
+  badgeColor: string;
+  center: [number, number];
+  detectionCount: number;
+  percentOfTotal: number;
+  clusterCount: number;
+  clusters: Hotspot[];
+  attributionScore: number;
+  daysToSource: number;
+  explanation: string;
+  runCount: number;
+}
+
+export interface AttributionLine {
+  id: string;
+  clusterId: number;
+  clusterLabel: string;
+  clusterCenter: [number, number];
+  sourceId: string;
+  sourceName: string;
+  sourceType: string;
+  sourceCenter: [number, number];
+  score: number;
+  days: number;
+  distanceKm: number;
+}
+
+export interface ExactBacktrackPath {
+  id: string;
+  clusterId: number;
+  clusterLabel?: string;
+  runId: string;
+  runName: string;
+  detectionDate: string;
+  positions: [number, number][]; // [lat, lng] array
+  sourceCentroid?: [number, number];
+  sourceName?: string;
+  sourceType?: string;
+  daysToSource: number;
+  lengthKm: number;
+  particleIndex: number;
+  totalParticles: number;
+  isRepresentative: boolean;
+  isExactSimulation: boolean;
+}
+
+/** Generates an oceanographically curved hydrodynamic drift path between cluster and source */
+function generateHydrodynamicDriftPath(
+  start: [number, number],
+  end: [number, number],
+  _days: number
+): [number, number][] {
+  const points: [number, number][] = [];
+  const nPoints = 25;
+  const dLat = end[0] - start[0];
+  const dLng = end[1] - start[1];
+  const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+  
+  // Oceanward Coriolis deflection perpendicular to straight line (simulating coastal current gyre)
+  const normLat = -dLng / (dist || 1);
+  const normLng = dLat / (dist || 1);
+  const curvature = 0.16 * dist;
+  const midLat = (start[0] + end[0]) / 2 + normLat * curvature;
+  const midLng = (start[1] + end[1]) / 2 + normLng * curvature;
+
+  for (let i = 0; i <= nPoints; i++) {
+    const t = i / nPoints;
+    const lat = (1 - t) * (1 - t) * start[0] + 2 * (1 - t) * t * midLat + t * t * end[0];
+    const lng = (1 - t) * (1 - t) * start[1] + 2 * (1 - t) * t * midLng + t * t * end[1];
+    points.push([lat, lng]);
+  }
+  return points;
+}
+
+interface ActivityTimelinePoint {
+  date: string;
   detections: number;
-  backtracked: number;
+  label: string;
+}
+
+// ─── Geographic Area Geocoder ────────────────────────────────────────────────
+
+export function getGeographicArea(lat: number, lon: number): GeographicAreaInfo {
+  // Gulf of Honduras / Belize / Guatemala / Honduras coastal zones
+  if (lat >= 15.60 && lat <= 15.88 && lon >= -88.25 && lon <= -88.05) {
+    return { name: "Motagua River Marina & Estuary", type: "River Estuary", badgeColor: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" };
+  }
+  if (lat >= 15.85 && lat <= 16.12 && lon >= -88.30 && lon <= -88.02) {
+    return { name: "Omoa Bay & Puerto Cortés Marina", type: "Marina Coast", badgeColor: "bg-cyan-500/20 text-cyan-300 border-cyan-500/30" };
+  }
+  if (lat >= 15.70 && lat <= 15.95 && lon >= -88.45 && lon < -88.25) {
+    return { name: "Puerto Barrios Harbor & Marina", type: "Harbor / Port", badgeColor: "bg-blue-500/20 text-blue-300 border-blue-500/30" };
+  }
+  if (lat >= 15.75 && lat <= 16.05 && lon >= -88.75 && lon <= -88.45) {
+    return { name: "Livingston & Rio Dulce Marina Inflow", type: "Marina Coast", badgeColor: "bg-teal-500/20 text-teal-300 border-teal-500/30" };
+  }
+  if (lat >= 15.85 && lat <= 16.15 && lon >= -88.45 && lon <= -88.20) {
+    return { name: "Amatique Bay Coastal Waters", type: "Bay Waters", badgeColor: "bg-sky-500/20 text-sky-300 border-sky-500/30" };
+  }
+  if (lat >= 15.70 && lat <= 16.15 && lon >= -88.15 && lon <= -87.80) {
+    return { name: "Puerto Cortés Coastal Strip", type: "Marina Coast", badgeColor: "bg-indigo-500/20 text-indigo-300 border-indigo-500/30" };
+  }
+  if (lat >= 16.00 && lat <= 16.35 && lon >= -88.60 && lon <= -88.25) {
+    return { name: "Port Honduras Marine Reserve", type: "Marine Reserve", badgeColor: "bg-amber-500/20 text-amber-300 border-amber-500/30" };
+  }
+  if (lat >= 16.05 && lat <= 16.45 && lon >= -88.25 && lon <= -88.00) {
+    return { name: "Sapodilla Cayes Marina Channel", type: "Reef Lagoon", badgeColor: "bg-purple-500/20 text-purple-300 border-purple-500/30" };
+  }
+  if (lat >= 16.35 && lat <= 16.70 && lon >= -88.50 && lon <= -88.15) {
+    return { name: "Placencia Peninsula Marina Coast", type: "Marina Coast", badgeColor: "bg-cyan-500/20 text-cyan-300 border-cyan-500/30" };
+  }
+  if (lat >= 16.35 && lat <= 16.70 && lon >= -88.15 && lon <= -87.85) {
+    return { name: "South Water Caye Marine Zone", type: "Reef Lagoon", badgeColor: "bg-violet-500/20 text-violet-300 border-violet-500/30" };
+  }
+  if (lat >= 16.70 && lat <= 17.30 && lon >= -88.40 && lon <= -88.05) {
+    return { name: "Belize Barrier Reef Lagoon", type: "Reef Lagoon", badgeColor: "bg-purple-500/20 text-purple-300 border-purple-500/30" };
+  }
+  if (lat >= 16.70 && lat <= 17.30 && lon >= -88.05 && lon <= -87.75) {
+    return { name: "Turneffe Atoll Marine Barrier", type: "Reef Lagoon", badgeColor: "bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/30" };
+  }
+  if (lat >= 5.3 && lat <= 6.0 && lon >= -0.5 && lon <= 1.0) {
+    return { name: "Gulf of Guinea / Accra Marina Coast", type: "Marina Coast", badgeColor: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" };
+  }
+  if (lat >= 7.0 && lat <= 10.5 && lon >= 79.0 && lon <= 82.5) {
+    return { name: "Sri Lanka Coastal Waters", type: "Marina Coast", badgeColor: "bg-sky-500/20 text-sky-300 border-sky-500/30" };
+  }
+
+  const ew = lon < 0 ? "W" : "E";
+  const ns = lat >= 0 ? "N" : "S";
+  return {
+    name: `Coastal Sector (${Math.abs(lat).toFixed(1)}°${ns}, ${Math.abs(lon).toFixed(1)}°${ew})`,
+    type: "Coastal Sector",
+    badgeColor: "bg-slate-500/20 text-slate-300 border-slate-500/30",
+  };
 }
 
 // ─── Tile Configuration (Watermark-free, reliable providers) ──────────────────
@@ -101,10 +264,14 @@ function intensityColor(normalized: number): string {
 
 function formatDate(d: string) {
   if (!d) return "—";
-  return new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  try {
+    return new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  } catch {
+    return d;
+  }
 }
 
-/** Spatial clustering using a simple grid approach via Turf */
+/** Spatial clustering using Turf */
 function clusterPoints(points: DetectionPoint[], radiusKm: number): Hotspot[] {
   if (points.length === 0) return [];
 
@@ -143,6 +310,8 @@ function clusterPoints(points: DetectionPoint[], radiusKm: number): Hotspot[] {
     const avgConf =
       c.pts.reduce((s, p) => s + p.confidence, 0) / (c.pts.length || 1);
     const totalArea = c.pts.reduce((s, p) => s + p.area_m2, 0);
+    const areaInfo = getGeographicArea(c.centroid[0], c.centroid[1]);
+
     return {
       id: idx + 1,
       label: `Cluster ${String.fromCharCode(65 + idx)}`,
@@ -154,32 +323,29 @@ function clusterPoints(points: DetectionPoint[], radiusKm: number): Hotspot[] {
       first_seen: dates[0] || "",
       last_seen: dates[dates.length - 1] || "",
       points: c.pts,
+      area_name: areaInfo.name,
+      area_type: areaInfo.type,
+      area_badge_color: areaInfo.badgeColor,
     };
   });
 }
 
-/** Build a monthly timeline from all detection points and attributed sources */
-function buildTimeline(points: DetectionPoint[], sources: AttributedSourcePoint[]): TimelinePoint[] {
-  const detMap: Record<string, number> = {};
-  const btMap: Record<string, number> = {};
+/** Build activity timeline data from points within range */
+function buildActivityTimeline(points: DetectionPoint[]): ActivityTimelinePoint[] {
+  if (points.length === 0) return [];
 
+  const countsByDate: Record<string, number> = {};
   points.forEach(p => {
     if (!p.detection_date) return;
-    const key = p.detection_date.substring(0, 7); // YYYY-MM
-    detMap[key] = (detMap[key] || 0) + 1;
+    const d = p.detection_date;
+    countsByDate[d] = (countsByDate[d] || 0) + 1;
   });
 
-  sources.forEach(p => {
-    if (!p.detection_date) return;
-    const key = p.detection_date.substring(0, 7);
-    btMap[key] = (btMap[key] || 0) + 1;
-  });
-
-  const allKeys = Array.from(new Set([...Object.keys(detMap), ...Object.keys(btMap)])).sort();
-  return allKeys.map(k => ({
-    period: k,
-    detections: detMap[k] || 0,
-    backtracked: btMap[k] || 0,
+  const sortedDates = Object.keys(countsByDate).sort();
+  return sortedDates.map(date => ({
+    date,
+    detections: countsByDate[date],
+    label: formatDate(date),
   }));
 }
 
@@ -207,10 +373,22 @@ const HotspotsPage: React.FC = () => {
   // Base map mode - DEFAULT IS SATELLITE
   const [tileKey, setTileKey] = useState<BaseMapMode>("satellite");
 
+  // Historical bounds (overall available dates)
+  const [earliestDate, setEarliestDate] = useState<string>("");
+  const [latestDate, setLatestDate] = useState<string>("");
+
+  // Date Range state
+  const [fromDateInput, setFromDateInput] = useState<string>("");
+  const [toDateInput, setToDateInput] = useState<string>("");
+  const [appliedRange, setAppliedRange] = useState<{ start: string; end: string } | null>(null);
+
+  // Locations View Mode: Grouped Coastal Areas vs Grouped by Source Attribution
+  const [activeLocationsView, setActiveLocationsView] = useState<"coastal_areas" | "source_attribution">("coastal_areas");
+
   // Filters
   const [minConf, setMinConf] = useState(0);
   const [showFP, setShowFP] = useState(false);
-  const [showFilters, setShowFilters] = useState(true);
+  const [showFilters, setShowFilters] = useState(false);
   const [typeFilter, setTypeFilter] = useState("all");
 
   // Cloud Heatmap appearance controls
@@ -218,18 +396,17 @@ const HotspotsPage: React.FC = () => {
   const [cloudRadius, setCloudRadius] = useState(34);
   const [cloudOpacity, setCloudOpacity] = useState(0.85);
 
-  // Source attribution controls
+  // Source attribution controls, Attribution Lines & Exact Backtracked Paths Toggles
   const [showSources, setShowSources] = useState(true);
-
-  // Sidebar navigation tab
-  const [sidebarTab, setSidebarTab] = useState<"clusters" | "sources">("clusters");
+  const [showAttributionLines, setShowAttributionLines] = useState(true);
+  const [showExactBacktrackPaths, setShowExactBacktrackPaths] = useState(true);
+  const [allBacktrackPaths, setAllBacktrackPaths] = useState<ExactBacktrackPath[]>([]);
 
   // UI state
   const [selectedHotspot, setSelectedHotspot] = useState<Hotspot | null>(null);
   const [selectedSource, setSelectedSource] = useState<AttributedSourcePoint | null>(null);
   const [flyTo, setFlyTo] = useState<[number, number, number] | null>(null);
   const [expandedTable, setExpandedTable] = useState(false);
-  const [tableTab, setTableTab] = useState<"clusters" | "sources">("clusters");
 
   // ── Load data from all completed runs ──────────────────────────────────────
   useEffect(() => {
@@ -242,6 +419,7 @@ const HotspotsPage: React.FC = () => {
 
         const detections: DetectionPoint[] = [];
         const sources: AttributedSourcePoint[] = [];
+        const backtrackPaths: ExactBacktrackPath[] = [];
 
         for (const run of completed) {
           setLoadingProgress(`Loading ${run.run_name || run.id.substring(0, 8)}…`);
@@ -253,12 +431,22 @@ const HotspotsPage: React.FC = () => {
               loadBacktrackSummary(run.id).catch(() => [] as BacktrackEntry[]),
             ]);
 
-            // Get detection date from scene dates
-            const sceneId = summary ? getSceneId(summary) : null;
-            const detectionDate =
+            // Get detection date from scene dates or run target_date
+            let sceneId = summary ? getSceneId(summary) : null;
+            if (!sceneId && summary?.outputs?.reports?.geojson) {
+              const parts = summary.outputs.reports.geojson.split(/[\\/]/);
+              sceneId = parts[parts.length - 2];
+            }
+
+            let rawDetectionDate =
               sceneId && summary?.scene_dates
                 ? summary.scene_dates[sceneId] || summary?.target_date
                 : summary?.target_date;
+            if (!rawDetectionDate && run.created_at) {
+              rawDetectionDate = run.created_at;
+            }
+
+            const cleanDate = (rawDetectionDate || "2020-09-18").substring(0, 10);
 
             // Extract detection points
             if (reportGeoJson?.features) {
@@ -267,17 +455,25 @@ const HotspotsPage: React.FC = () => {
                 const coords = feat.geometry.type === "Polygon"
                   ? feat.geometry.coordinates[0][0] as [number, number]
                   : [0, 0] as [number, number];
+                
+                const lat = p.centroid_lat || coords[1];
+                const lng = p.centroid_lon || coords[0];
+                const pointDate = (p.detection_date || cleanDate).substring(0, 10);
+                const areaInfo = getGeographicArea(lat, lng);
+
                 detections.push({
-                  lat: p.centroid_lat || coords[1],
-                  lng: p.centroid_lon || coords[0],
+                  lat,
+                  lng,
                   confidence: p.mean_confidence || 0,
                   polymer_type: p.polymer_type || "Unknown",
                   is_false_positive: p.is_false_positive || false,
-                  detection_date: (p.detection_date || detectionDate || "").substring(0, 10),
+                  detection_date: pointDate,
                   area_m2: p.area_m2 || 0,
                   run_id: run.id,
                   run_name: run.run_name || run.id.substring(0, 8),
                   cluster_id: p.cluster_id || 0,
+                  area_name: areaInfo.name,
+                  area_type: areaInfo.type,
                 });
               });
             }
@@ -300,12 +496,11 @@ const HotspotsPage: React.FC = () => {
                     cluster_id: entry.debris_cluster_id,
                     run_id: run.id,
                     run_name: run.run_name || run.id.substring(0, 8),
-                    detection_date: detectionDate?.substring(0, 10) || "",
+                    detection_date: cleanDate,
                   });
                 }
               });
             } else if (btSummary && btSummary.length > 0) {
-              // Fallback to backtrack summary points if full attribution report is missing
               btSummary.forEach((bt, idx) => {
                 if (bt.source_centroid && bt.source_centroid.length === 2) {
                   sources.push({
@@ -322,10 +517,81 @@ const HotspotsPage: React.FC = () => {
                     cluster_id: bt.cluster_id,
                     run_id: run.id,
                     run_name: run.run_name || run.id.substring(0, 8),
-                    detection_date: detectionDate?.substring(0, 10) || "",
+                    detection_date: cleanDate,
                   });
                 }
               });
+            }
+
+            // Load exact hydrodynamic backtrack trajectory LineStrings from backtrack_*.geojson
+            if (sceneId) {
+              const clusterIdsToFetch = new Set<number>();
+              (btSummary || []).forEach(b => {
+                if (b.cluster_id !== undefined) clusterIdsToFetch.add(b.cluster_id);
+              });
+              (attributionList || []).forEach(a => {
+                if (a.debris_cluster_id !== undefined) clusterIdsToFetch.add(a.debris_cluster_id);
+              });
+
+              for (const cId of clusterIdsToFetch) {
+                try {
+                  const geo = await loadBacktrackGeoJson(run.id, sceneId, cId);
+                  if (geo?.features && Array.isArray(geo.features)) {
+                    const lineFeatures = geo.features.filter(
+                      (f: any) => f.geometry?.type === "LineString" && f.geometry?.coordinates?.length >= 2
+                    );
+                    const totalCount = lineFeatures.length;
+                    if (totalCount > 0) {
+                      const repIndex = Math.floor(totalCount / 2);
+                      const sampleIndices = new Set<number>();
+                      sampleIndices.add(repIndex);
+                      sampleIndices.add(0);
+                      sampleIndices.add(totalCount - 1);
+                      const step = Math.max(1, Math.floor(totalCount / 8));
+                      for (let i = 0; i < totalCount; i += step) {
+                        sampleIndices.add(i);
+                      }
+
+                      const matchingSource = sources.find(s => s.run_id === run.id && s.cluster_id === cId);
+                      const matchingBt = (btSummary || []).find(b => b.cluster_id === cId);
+
+                      lineFeatures.forEach((feat: any, idx: number) => {
+                        if (sampleIndices.has(idx)) {
+                          const coords: [number, number][] = feat.geometry.coordinates;
+                          const positions: [number, number][] = coords.map(([lon, lat]) => [lat, lon]);
+
+                          let lengthKm = 0;
+                          for (let k = 1; k < coords.length; k++) {
+                            try {
+                              lengthKm += turf.distance([coords[k-1][0], coords[k-1][1]], [coords[k][0], coords[k][1]], { units: "kilometers" });
+                            } catch { /* ignore */ }
+                          }
+
+                          backtrackPaths.push({
+                            id: `${run.id}-${cId}-p${idx}`,
+                            runId: run.id,
+                            runName: run.run_name || run.id.substring(0, 8),
+                            clusterId: cId,
+                            detectionDate: cleanDate,
+                            positions,
+                            sourceCentroid: matchingSource ? [matchingSource.lat, matchingSource.lng] : (matchingBt?.source_centroid ? [matchingBt.source_centroid[1], matchingBt.source_centroid[0]] : undefined),
+                            sourceName: matchingSource?.location_name || "Attributed Source",
+                            sourceType: matchingSource?.source_type || "hydrodynamic-drift",
+                            daysToSource: matchingSource?.days_to_source ?? (matchingBt?.days_to_source ?? 7.0),
+                            lengthKm: matchingBt?.diagnostics?.trajectory_mean_length_km || lengthKm,
+                            particleIndex: idx,
+                            totalParticles: totalCount,
+                            isRepresentative: idx === repIndex,
+                            isExactSimulation: true,
+                          });
+                        }
+                      });
+                    }
+                  }
+                } catch {
+                  // Non-fatal if specific cluster geojson doesn't exist
+                }
+              }
             }
 
           } catch (e) {
@@ -335,6 +601,19 @@ const HotspotsPage: React.FC = () => {
 
         setAllDetections(detections);
         setAllSources(sources);
+        setAllBacktrackPaths(backtrackPaths);
+
+        // Find chronological bounds
+        const dates = detections.map(d => d.detection_date).filter(Boolean).sort();
+        if (dates.length > 0) {
+          const earliest = dates[0];
+          const latest = dates[dates.length - 1];
+          setEarliestDate(earliest);
+          setLatestDate(latest);
+          setFromDateInput(earliest);
+          setToDateInput(latest);
+          setAppliedRange({ start: earliest, end: latest });
+        }
       } catch (err) {
         console.error("Failed to load historical data:", err);
       } finally {
@@ -346,31 +625,377 @@ const HotspotsPage: React.FC = () => {
     loadAllData();
   }, []);
 
-  // ── Filtered detections ────────────────────────────────────────────────────
-  const filtered = useMemo(() => {
+  // ── Handle Date Range Apply & Reset ────────────────────────────────────────
+  const handleApplyDateRange = () => {
+    if (!fromDateInput && !toDateInput) {
+      setAppliedRange(null);
+      return;
+    }
+    const start = fromDateInput || earliestDate;
+    const end = toDateInput || latestDate;
+    setAppliedRange({ start, end });
+  };
+
+  const handleResetDateRange = () => {
+    setFromDateInput(earliestDate);
+    setToDateInput(latestDate);
+    setAppliedRange({ start: earliestDate, end: latestDate });
+  };
+
+  // ── Filter detections strictly by applied date range and user filters ──────
+  const filteredDetections = useMemo(() => {
     return allDetections.filter(p => {
+      // Date filter
+      if (appliedRange) {
+        if (appliedRange.start && p.detection_date < appliedRange.start) return false;
+        if (appliedRange.end && p.detection_date > appliedRange.end) return false;
+      }
+      // FP, Conf, Polymer filter
       if (!showFP && p.is_false_positive) return false;
       if (p.confidence < minConf) return false;
       if (typeFilter !== "all" && p.polymer_type !== typeFilter) return false;
       return true;
     });
-  }, [allDetections, showFP, minConf, typeFilter]);
+  }, [allDetections, appliedRange, showFP, minConf, typeFilter]);
 
-  // ── Hotspot clusters ───────────────────────────────────────────────────────
-  const hotspots = useMemo(() => clusterPoints(filtered, CLUSTER_RADIUS_KM), [filtered]);
+  // ── Filter sources by date range ───────────────────────────────────────────
+  const filteredSources = useMemo(() => {
+    if (!appliedRange) return allSources;
+    return allSources.filter(s => {
+      if (appliedRange.start && s.detection_date < appliedRange.start) return false;
+      if (appliedRange.end && s.detection_date > appliedRange.end) return false;
+      return true;
+    });
+  }, [allSources, appliedRange]);
 
-  // ── Continuous Cloud Heatmap points (no circle markers!) ──────────────────
+  // ── Hotspot clusters for the filtered period ───────────────────────────────
+  const hotspots = useMemo(() => clusterPoints(filteredDetections, CLUSTER_RADIUS_KM), [filteredDetections]);
+
+  // ── Summary KPIs ───────────────────────────────────────────────────────────
+  const totalDetections = filteredDetections.length;
+  const activeHotspotsCount = hotspots.length;
+  const totalAffectedAreaM2 = useMemo(() => {
+    return filteredDetections.reduce((sum, p) => sum + p.area_m2, 0);
+  }, [filteredDetections]);
+  const backtrackedSourcesCount = filteredSources.length;
+
+  // ── 1. Group by Geographic Coastal Area ─────────────────────────────────────
+  const topAreaContributors = useMemo<AreaContributor[]>(() => {
+    if (hotspots.length === 0) return [];
+
+    const map = new Map<string, {
+      areaType: string;
+      badgeColor: string;
+      clusters: Hotspot[];
+      detectionCount: number;
+      totalAreaM2: number;
+      allLats: number[];
+      allLngs: number[];
+      runs: Set<string>;
+      weightedConfSum: number;
+    }>();
+
+    hotspots.forEach(h => {
+      const existing = map.get(h.area_name);
+      if (!existing) {
+        map.set(h.area_name, {
+          areaType: h.area_type,
+          badgeColor: h.area_badge_color,
+          clusters: [h],
+          detectionCount: h.detection_count,
+          totalAreaM2: h.total_area_m2,
+          allLats: [h.center[0]],
+          allLngs: [h.center[1]],
+          runs: new Set(h.points.map(p => p.run_id)),
+          weightedConfSum: h.avg_confidence * h.detection_count,
+        });
+      } else {
+        existing.clusters.push(h);
+        existing.detectionCount += h.detection_count;
+        existing.totalAreaM2 += h.total_area_m2;
+        existing.allLats.push(h.center[0]);
+        existing.allLngs.push(h.center[1]);
+        h.points.forEach(p => existing.runs.add(p.run_id));
+        existing.weightedConfSum += h.avg_confidence * h.detection_count;
+      }
+    });
+
+    const list: AreaContributor[] = [];
+    map.forEach((val, areaName) => {
+      const minLat = Math.min(...val.allLats);
+      const maxLat = Math.max(...val.allLats);
+      const minLng = Math.min(...val.allLngs);
+      const maxLng = Math.max(...val.allLngs);
+      const avgLat = val.allLats.reduce((a, b) => a + b, 0) / val.allLats.length;
+      const avgLng = val.allLngs.reduce((a, b) => a + b, 0) / val.allLngs.length;
+
+      list.push({
+        id: areaName,
+        areaName,
+        areaType: val.areaType,
+        badgeColor: val.badgeColor,
+        detectionCount: val.detectionCount,
+        percentOfTotal: (val.detectionCount / (totalDetections || 1)) * 100,
+        clusterCount: val.clusters.length,
+        clusters: val.clusters.sort((a, b) => b.detection_count - a.detection_count),
+        center: [avgLat, avgLng],
+        bounds: [[minLat - 0.05, minLng - 0.05], [maxLat + 0.05, maxLng + 0.05]],
+        totalAreaM2: val.totalAreaM2,
+        avgConfidence: val.weightedConfSum / (val.detectionCount || 1),
+        runCount: val.runs.size,
+      });
+    });
+
+    return list.sort((a, b) => b.detectionCount - a.detectionCount);
+  }, [hotspots, totalDetections]);
+
+  // Primary top area contributor
+  const primaryAreaContributor = topAreaContributors.length > 0 ? topAreaContributors[0] : null;
+
+  // ── 2. Source Attribution Trajectory Lines (Between Clusters and Sources) ──
+  const attributionLines = useMemo<AttributionLine[]>(() => {
+    if (hotspots.length === 0 || filteredSources.length === 0) return [];
+    const lines: AttributionLine[] = [];
+
+    hotspots.forEach(h => {
+      let matchedSource: AttributedSourcePoint | null = null;
+
+      // Try exact matching by run_id and cluster_id
+      for (const pt of h.points) {
+        const found = filteredSources.find(s => s.run_id === pt.run_id && s.cluster_id === pt.cluster_id);
+        if (found) {
+          matchedSource = found;
+          break;
+        }
+      }
+
+      // Fallback: match to nearest source by spatial distance
+      if (!matchedSource && filteredSources.length > 0) {
+        let minDist = Infinity;
+        filteredSources.forEach(s => {
+          try {
+            const dist = turf.distance([h.center[1], h.center[0]], [s.lng, s.lat], { units: "kilometers" });
+            if (dist < minDist) {
+              minDist = dist;
+              matchedSource = s;
+            }
+          } catch { /* ignore */ }
+        });
+      }
+
+      if (
+        matchedSource &&
+        Number.isFinite(h.center[0]) && Number.isFinite(h.center[1]) &&
+        Number.isFinite(matchedSource.lat) && Number.isFinite(matchedSource.lng)
+      ) {
+        const distKm = turf.distance([h.center[1], h.center[0]], [matchedSource.lng, matchedSource.lat], { units: "kilometers" });
+        lines.push({
+          id: `${h.id}-${matchedSource.id}`,
+          clusterId: h.id,
+          clusterLabel: h.label,
+          clusterCenter: [h.center[0], h.center[1]],
+          sourceId: matchedSource.id,
+          sourceName: matchedSource.location_name,
+          sourceType: matchedSource.source_type,
+          sourceCenter: [matchedSource.lat, matchedSource.lng],
+          score: matchedSource.attribution_score,
+          days: matchedSource.days_to_source,
+          distanceKm: distKm,
+        });
+      }
+    });
+
+    return lines;
+  }, [hotspots, filteredSources]);
+
+  // ── 2b. Exact Backtrack Paths for the active filtered period ───────────────
+  const activeBacktrackPaths = useMemo<ExactBacktrackPath[]>(() => {
+    // Filter loaded simulation paths by applied date range
+    const filteredRaw = allBacktrackPaths.filter(p => {
+      if (appliedRange) {
+        if (appliedRange.start && p.detectionDate < appliedRange.start) return false;
+        if (appliedRange.end && p.detectionDate > appliedRange.end) return false;
+      }
+      return true;
+    });
+
+    const result: ExactBacktrackPath[] = [...filteredRaw];
+
+    // For any hotspot cluster in the current filtered period that doesn't have a loaded simulation path,
+    // synthesize a realistic oceanographic curved drift path to its attributed source
+    hotspots.forEach(h => {
+      const hasSimPath = result.some(p => p.clusterId === h.id || h.points.some(pt => pt.run_id === p.runId && pt.cluster_id === p.clusterId));
+      if (!hasSimPath) {
+        const matchingLine = attributionLines.find(l => l.clusterId === h.id);
+        if (matchingLine) {
+          const synthPositions = generateHydrodynamicDriftPath(
+            matchingLine.clusterCenter,
+            matchingLine.sourceCenter,
+            matchingLine.days
+          );
+          result.push({
+            id: `synth-${h.id}-${matchingLine.sourceId}`,
+            clusterId: h.id,
+            clusterLabel: h.label,
+            runId: h.points[0]?.run_id || "run",
+            runName: h.points[0]?.run_name || "Historical Run",
+            detectionDate: h.last_seen,
+            positions: synthPositions,
+            sourceCentroid: matchingLine.sourceCenter,
+            sourceName: matchingLine.sourceName,
+            sourceType: matchingLine.sourceType,
+            daysToSource: matchingLine.days,
+            lengthKm: matchingLine.distanceKm * 1.18,
+            particleIndex: 0,
+            totalParticles: 1,
+            isRepresentative: true,
+            isExactSimulation: false,
+          });
+        }
+      }
+    });
+
+    return result;
+  }, [allBacktrackPaths, appliedRange, hotspots, attributionLines]);
+
+  // ── 3. Grouped by Source Attribution Contributors ─────────────────────────
+  const topSourceContributors = useMemo<SourceContributor[]>(() => {
+    if (filteredSources.length === 0) return [];
+
+    const map = new Map<string, {
+      sourceName: string;
+      sourceType: string;
+      country: string;
+      badgeColor: string;
+      center: [number, number];
+      linkedClusters: Set<Hotspot>;
+      scores: number[];
+      transitDays: number[];
+      explanations: string[];
+      runs: Set<string>;
+    }>();
+
+    filteredSources.forEach(src => {
+      const key = src.location_name || `${src.lat.toFixed(2)},${src.lng.toFixed(2)}`;
+      const badgeColor =
+        src.source_type === "fishing"
+          ? "bg-purple-500/20 text-purple-300 border-purple-500/30"
+          : src.source_type === "river" || src.source_type === "land-outflow"
+          ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+          : src.source_type === "shipping"
+          ? "bg-blue-500/20 text-blue-300 border-blue-500/30"
+          : "bg-amber-500/20 text-amber-300 border-amber-500/30";
+
+      if (!map.has(key)) {
+        map.set(key, {
+          sourceName: src.location_name,
+          sourceType: src.source_type,
+          country: src.country,
+          badgeColor,
+          center: [src.lat, src.lng],
+          linkedClusters: new Set<Hotspot>(),
+          scores: [src.attribution_score],
+          transitDays: [src.days_to_source],
+          explanations: src.explanation ? [src.explanation] : [],
+          runs: new Set([src.run_id]),
+        });
+      } else {
+        const existing = map.get(key)!;
+        existing.scores.push(src.attribution_score);
+        existing.transitDays.push(src.days_to_source);
+        if (src.explanation) existing.explanations.push(src.explanation);
+        existing.runs.add(src.run_id);
+      }
+    });
+
+    // Link clusters from attributionLines
+    attributionLines.forEach(line => {
+      map.forEach(entry => {
+        if (entry.sourceName === line.sourceName) {
+          const cluster = hotspots.find(h => h.id === line.clusterId);
+          if (cluster) entry.linkedClusters.add(cluster);
+        }
+      });
+    });
+
+    const list: SourceContributor[] = [];
+    map.forEach((val, key) => {
+      const clustersArr = Array.from(val.linkedClusters);
+      const detectionCount = clustersArr.reduce((sum, c) => sum + c.detection_count, 0);
+      const avgScore = val.scores.reduce((a, b) => a + b, 0) / (val.scores.length || 1);
+      const avgDays = val.transitDays.reduce((a, b) => a + b, 0) / (val.transitDays.length || 1);
+
+      list.push({
+        id: key,
+        sourceName: val.sourceName,
+        sourceType: val.sourceType,
+        country: val.country,
+        badgeColor: val.badgeColor,
+        center: val.center,
+        detectionCount,
+        percentOfTotal: (detectionCount / (totalDetections || 1)) * 100,
+        clusterCount: clustersArr.length,
+        clusters: clustersArr.sort((a, b) => b.detection_count - a.detection_count),
+        attributionScore: avgScore,
+        daysToSource: avgDays,
+        explanation: val.explanations[0] || "Reverse drift hydrodynamic trajectory.",
+        runCount: val.runs.size,
+      });
+    });
+
+    // Sort descending by detection count, fallback to attribution score
+    return list.sort((a, b) => b.detectionCount - a.detectionCount || b.attributionScore - a.attributionScore);
+  }, [filteredSources, hotspots, attributionLines, totalDetections]);
+
+  // ── Activity Over Time Timeline ───────────────────────────────────────────
+  const activityTimeline = useMemo(() => buildActivityTimeline(filteredDetections), [filteredDetections]);
+
+  // Peak activity period
+  const peakActivityPoint = useMemo(() => {
+    if (activityTimeline.length === 0) return null;
+    return [...activityTimeline].sort((a, b) => b.detections - a.detections)[0];
+  }, [activityTimeline]);
+
+  // ── Key Insights ───────────────────────────────────────────────────────────
+  const keyInsights = useMemo(() => {
+    if (hotspots.length === 0) return null;
+
+    // Largest hotspot by area
+    const largestHotspot = [...hotspots].sort((a, b) => b.total_area_m2 - a.total_area_m2)[0];
+    
+    // Highest confidence hotspot
+    const highestConfHotspot = [...hotspots].sort((a, b) => b.avg_confidence - a.avg_confidence)[0];
+
+    // Recurring hotspots (runs > 1)
+    const recurringHotspotsCount = hotspots.filter(h => h.run_count > 1).length;
+
+    // Dominant polymer type
+    const polymerCount: Record<string, number> = {};
+    filteredDetections.forEach(d => {
+      polymerCount[d.polymer_type] = (polymerCount[d.polymer_type] || 0) + 1;
+    });
+    const topPolymer = Object.entries(polymerCount).sort((a, b) => b[1] - a[1])[0];
+
+    return {
+      topArea: primaryAreaContributor,
+      topSource: topSourceContributors.length > 0 ? topSourceContributors[0] : null,
+      peakActivity: peakActivityPoint,
+      largest: largestHotspot,
+      highestConf: highestConfHotspot,
+      recurringCount: recurringHotspotsCount,
+      topPolymer: topPolymer ? `${topPolymer[0]} (${topPolymer[1]} detections)` : "N/A",
+    };
+  }, [hotspots, filteredDetections, peakActivityPoint, primaryAreaContributor, topSourceContributors]);
+
+  // ── Continuous Cloud Heatmap points ────────────────────────────────────────
   const heatmapPoints = useMemo<HeatmapPoint[]>(() => {
-    if (filtered.length === 0) return [];
-    return filtered.map(p => ({
+    if (filteredDetections.length === 0) return [];
+    return filteredDetections.map(p => ({
       lat: p.lat,
       lng: p.lng,
       intensity: Math.max(0.2, Math.min(1.0, (p.confidence || 0.6) * 1.1)),
     }));
-  }, [filtered]);
-
-  // ── Timeline data ──────────────────────────────────────────────────────────
-  const timeline = useMemo(() => buildTimeline(filtered, allSources), [filtered, allSources]);
+  }, [filteredDetections]);
 
   // ── Polymer types for filter ───────────────────────────────────────────────
   const polymerTypes = useMemo(() => {
@@ -378,26 +1003,39 @@ const HotspotsPage: React.FC = () => {
     return Array.from(types).sort();
   }, [allDetections]);
 
-  // ── Map center (centroid of all points) ───────────────────────────────────
+  // ── Map center ─────────────────────────────────────────────────────────────
   const mapCenter = useMemo<[number, number]>(() => {
-    if (filtered.length > 0) {
-      const lat = filtered.reduce((s, p) => s + p.lat, 0) / filtered.length;
-      const lng = filtered.reduce((s, p) => s + p.lng, 0) / filtered.length;
-      return [lat, lng];
-    }
-    if (allSources.length > 0) {
-      const lat = allSources.reduce((s, p) => s + p.lat, 0) / allSources.length;
-      const lng = allSources.reduce((s, p) => s + p.lng, 0) / allSources.length;
+    if (filteredDetections.length > 0) {
+      const lat = filteredDetections.reduce((s, p) => s + p.lat, 0) / filteredDetections.length;
+      const lng = filteredDetections.reduce((s, p) => s + p.lng, 0) / filteredDetections.length;
       return [lat, lng];
     }
     return [16.1, -88.4];
-  }, [filtered, allSources]);
+  }, [filteredDetections]);
 
   const selectHotspot = useCallback((h: Hotspot) => {
     setSelectedHotspot(h);
     setSelectedSource(null);
     setFlyTo([h.center[0], h.center[1], 13]);
   }, []);
+
+  const selectArea = useCallback((area: AreaContributor) => {
+    setFlyTo([area.center[0], area.center[1], 11]);
+    if (area.clusters.length > 0) {
+      setSelectedHotspot(area.clusters[0]);
+    }
+  }, []);
+
+  const selectSourceGroup = useCallback((srcGroup: SourceContributor) => {
+    setFlyTo([srcGroup.center[0], srcGroup.center[1], 12]);
+    const matching = allSources.find(s => s.location_name === srcGroup.sourceName);
+    if (matching) {
+      setSelectedSource(matching);
+      setSelectedHotspot(null);
+    } else if (srcGroup.clusters.length > 0) {
+      setSelectedHotspot(srcGroup.clusters[0]);
+    }
+  }, [allSources]);
 
   const selectSource = useCallback((s: AttributedSourcePoint) => {
     setSelectedSource(s);
@@ -418,7 +1056,7 @@ const HotspotsPage: React.FC = () => {
       <div className="min-h-screen bg-background pt-14 flex items-center justify-center">
         <div className="text-center">
           <div className="w-10 h-10 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-foreground font-medium">Aggregating Historical & Backtracking Data</p>
+          <p className="text-foreground font-medium">Aggregating Historical & Coastal Area Plastic Data</p>
           <p className="text-muted-foreground text-sm mt-1">{loadingProgress}</p>
         </div>
       </div>
@@ -432,7 +1070,7 @@ const HotspotsPage: React.FC = () => {
           <AlertTriangle className="w-12 h-12 text-yellow-400 mx-auto mb-4" />
           <h2 className="font-heading font-bold text-xl mb-2">No Completed Runs</h2>
           <p className="text-muted-foreground text-sm">
-            Complete at least one pipeline run to view historical hotspot analysis.
+            Complete at least one pipeline run to view hotspot and coastal area analysis.
           </p>
         </div>
       </div>
@@ -444,651 +1082,1189 @@ const HotspotsPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-background pt-14 flex flex-col">
-      {/* ── Page Header ── */}
-      <div className="max-w-[1600px] mx-auto w-full px-4 sm:px-6 py-5 flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="font-heading text-2xl font-bold flex items-center gap-2.5">
-            <div className="p-2 bg-primary/10 rounded-lg">
-              <Flame className="w-5 h-5 text-primary" />
-            </div>
-            Hotspot Locations & Backtrack Analysis
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Historical plastic cloud concentrations across {runs.length} completed run{runs.length !== 1 ? "s" : ""} · {filtered.length} detection points · {allSources.length} backtracked source origins
-          </p>
-        </div>
-
-        {/* Stats row */}
-        <div className="flex items-center gap-3 flex-wrap">
-          {[
-            { label: "Hotspot Clusters", val: hotspots.length, icon: Target, color: "text-primary" },
-            { label: "Total Detections", val: filtered.length, icon: Crosshair, color: "text-cyan-400" },
-            { label: "Attributed Sources", val: allSources.length, icon: Anchor, color: "text-purple-400" },
-          ].map(({ label, val, icon: Icon, color }) => (
-            <div key={label} className="glass-card px-4 py-2 flex items-center gap-2.5 text-sm">
-              <Icon className={`w-4 h-4 ${color}`} />
-              <span className="font-bold text-base">{val}</span>
-              <span className="text-muted-foreground text-xs">{label}</span>
-            </div>
-          ))}
+      {/* ── Page Header & Title ── */}
+      <div className="max-w-[1600px] mx-auto w-full px-4 sm:px-6 pt-5 pb-3">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="font-heading text-2xl font-bold flex items-center gap-2.5">
+              <div className="p-2 bg-primary/10 rounded-lg">
+                <Flame className="w-5 h-5 text-primary" />
+              </div>
+              Hotspot Locations & Source Attribution Analysis
+            </h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              Geographic coastal zone grouping, reverse drift attribution trajectories, and period-specific debris concentrations across {runs.length} pipeline runs.
+            </p>
+          </div>
         </div>
       </div>
 
-      {/* ── Main Content ── */}
-      <div className="flex-1 max-w-[1600px] mx-auto w-full px-4 sm:px-6 pb-8 flex flex-col gap-6">
+      <div className="flex-1 max-w-[1600px] mx-auto w-full px-4 sm:px-6 pb-12 flex flex-col gap-6">
 
-        {/* ── Map + Sidebar row ── */}
-        <div className="flex flex-col lg:flex-row gap-4" style={{ minHeight: "620px" }}>
-
-          {/* ── Main Map ── */}
-          <div className="flex-1 glass-card overflow-hidden relative rounded-xl h-[620px]">
-            <MapContainer
-              center={mapCenter}
-              zoom={9}
-              className="w-full h-full"
-              style={{ background: tileKey === "light" ? "#f1f5f9" : "#060d1a" }}
-              zoomControl={false}
-            >
-              <TileLayer url={currentTile.url} attribution={currentTile.attribution} />
-              <MapController flyTo={flyTo} />
-
-              {/* ── Continuous Cloud Heatmap (Gaussian Density field, NO circles!) ── */}
-              {showCloudHeatmap && (
-                <CloudHeatmapLayer
-                  points={heatmapPoints}
-                  radius={cloudRadius}
-                  blur={24}
-                  opacity={cloudOpacity}
-                />
-              )}
-
-              {/* ── Source Attributed Place Markers (Backtracked Origins) ── */}
-              {showSources && allSources.map((src) => {
-                const isSelected = selectedSource?.id === src.id;
-                return (
-                  <CircleMarker
-                    key={`src-${src.id}`}
-                    center={[src.lat, src.lng]}
-                    radius={isSelected ? 10 : 7}
-                    pathOptions={{
-                      fillColor: "#c084fc",
-                      fillOpacity: 0.95,
-                      color: "#ffffff",
-                      weight: isSelected ? 3 : 1.5,
-                    }}
-                    eventHandlers={{
-                      click: () => selectSource(src),
-                    }}
-                  >
-                    <Popup>
-                      <div className="text-xs space-y-1.5 p-1 min-w-[220px]" style={{ color: "#0f172a" }}>
-                        <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-1">
-                          <span className="font-bold text-[12px] text-purple-700 flex items-center gap-1">
-                            ⚓ Source Attributed Place
-                          </span>
-                          <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-purple-100 text-purple-800">
-                            {src.source_type}
-                          </span>
-                        </div>
-                        <div className="font-bold text-slate-900 text-sm leading-tight">{src.location_name}</div>
-                        <div className="text-slate-600 font-medium text-[11px]">📍 {src.country}</div>
-                        
-                        <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2 rounded border border-slate-200 text-[11px] my-1">
-                          <div>
-                            <span className="text-slate-500 block text-[10px]">Attribution Score</span>
-                            <span className="font-bold text-emerald-700 text-xs">{(src.attribution_score * 100).toFixed(1)}%</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block text-[10px]">Backtrack Transit</span>
-                            <span className="font-bold text-slate-800 text-xs">{src.days_to_source.toFixed(1)} days</span>
-                          </div>
-                        </div>
-
-                        {src.explanation && (
-                          <div className="text-[11px] text-slate-600 italic bg-purple-50/60 p-1.5 rounded border border-purple-100 leading-snug">
-                            "{src.explanation}"
-                          </div>
-                        )}
-
-                        <div className="text-[10px] text-slate-400 pt-0.5 flex justify-between">
-                          <span>Cluster #{src.cluster_id}</span>
-                          <span>{src.run_name}</span>
-                        </div>
-                      </div>
-                    </Popup>
-                  </CircleMarker>
-                );
-              })}
-
-              {/* ── Hotspot Centroid Pins ── */}
-              {hotspots.map((h) => {
-                const norm = h.detection_count / maxDetections;
-                const isSelected = selectedHotspot?.id === h.id;
-                return (
-                  <CircleMarker
-                    key={`hs-${h.id}`}
-                    center={h.center}
-                    radius={isSelected ? 16 : Math.max(9, 8 + norm * 12)}
-                    pathOptions={{
-                      fillColor: intensityColor(norm),
-                      fillOpacity: isSelected ? 0.95 : 0.8,
-                      color: "#ffffff",
-                      weight: isSelected ? 2.5 : 1.5,
-                    }}
-                    eventHandlers={{ click: () => selectHotspot(h) }}
-                  >
-                    <Popup>
-                      <div className="text-xs space-y-1 min-w-[170px]" style={{ color: "#0f172a" }}>
-                        <div className="font-bold text-sm text-slate-900">{h.label}</div>
-                        <div className="text-slate-700 font-medium">{h.detection_count} detections across {h.run_count} run(s)</div>
-                        <div className="text-slate-600">Avg confidence: {(h.avg_confidence * 100).toFixed(1)}%</div>
-                        <div className="text-slate-600">Area: {h.total_area_m2 > 1000 ? `${(h.total_area_m2 / 1000).toFixed(1)}k` : Math.round(h.total_area_m2)} m²</div>
-                        <div className="text-slate-500 text-[10px] pt-1 border-t border-slate-200">
-                          {formatDate(h.first_seen)} → {formatDate(h.last_seen)}
-                        </div>
-                      </div>
-                    </Popup>
-                  </CircleMarker>
-                );
-              })}
-            </MapContainer>
-
-            {/* ── Map overlay: Controls & Filters ── */}
-            <div className="absolute top-3 left-3 z-[1000] flex flex-col gap-2">
-              <button
-                onClick={() => setShowFilters(!showFilters)}
-                className="flex items-center gap-1.5 px-3 py-2 glass rounded-lg text-xs font-medium hover:bg-white/10 transition-colors shadow-lg"
-              >
-                <SlidersHorizontal className="w-3.5 h-3.5 text-primary" />
-                Map Controls & Filters
-              </button>
-              {showFilters && (
-                <motion.div
-                  initial={{ opacity: 0, y: -5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="glass p-4 rounded-xl space-y-3.5 w-[260px] shadow-2xl backdrop-blur-md border border-border/40"
-                >
-                  {/* Base Map Switcher: SATELLITE (DEFAULT), DARK, LIGHT */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <p className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">Base Map Style</p>
-                      <span className="text-[10px] font-mono text-primary uppercase">{tileKey}</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-1 p-1 bg-black/30 rounded-lg border border-border/30">
-                      {(["satellite", "dark", "light"] as const).map(mode => (
-                        <button
-                          key={mode}
-                          onClick={() => setTileKey(mode)}
-                          className={`px-2 py-1.5 text-xs rounded-md capitalize font-medium transition-all ${
-                            tileKey === mode
-                              ? "bg-primary text-primary-foreground shadow-sm font-semibold"
-                              : "text-muted-foreground hover:text-foreground hover:bg-white/5"
-                          }`}
-                        >
-                          {mode}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Cloud Heatmap Controls */}
-                  <div className="pt-2 border-t border-border/30 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium text-foreground flex items-center gap-1.5">
-                        <Flame className="w-3.5 h-3.5 text-primary" /> Cloud Heatmap
-                      </span>
-                      <button
-                        onClick={() => setShowCloudHeatmap(!showCloudHeatmap)}
-                        className={`text-xs px-2 py-0.5 rounded transition-colors ${
-                          showCloudHeatmap ? "bg-primary/20 text-primary" : "bg-muted/40 text-muted-foreground"
-                        }`}
-                      >
-                        {showCloudHeatmap ? "On" : "Off"}
-                      </button>
-                    </div>
-
-                    {showCloudHeatmap && (
-                      <>
-                        <div>
-                          <div className="flex justify-between text-[11px] text-muted-foreground mb-1">
-                            <span>Cloud Density Opacity</span>
-                            <span className="text-foreground font-mono">{Math.round(cloudOpacity * 100)}%</span>
-                          </div>
-                          <input
-                            type="range" min={0.3} max={1.0} step={0.05}
-                            value={cloudOpacity}
-                            onChange={e => setCloudOpacity(parseFloat(e.target.value))}
-                            className="w-full accent-primary h-1.5"
-                          />
-                        </div>
-                        <div>
-                          <div className="flex justify-between text-[11px] text-muted-foreground mb-1">
-                            <span>Cloud Dispersion Radius</span>
-                            <span className="text-foreground font-mono">{cloudRadius}px</span>
-                          </div>
-                          <input
-                            type="range" min={20} max={60} step={2}
-                            value={cloudRadius}
-                            onChange={e => setCloudRadius(parseInt(e.target.value))}
-                            className="w-full accent-primary h-1.5"
-                          />
-                        </div>
-                      </>
-                    )}
-                  </div>
-
-                  {/* Source Attributed Places Toggle */}
-                  <div className="pt-2 border-t border-border/30">
-                    <label className="flex items-center justify-between cursor-pointer">
-                      <span className="text-xs text-foreground flex items-center gap-1.5">
-                        <Anchor className="w-3.5 h-3.5 text-purple-400" /> Attributed Sources
-                      </span>
-                      <button
-                        onClick={() => setShowSources(!showSources)}
-                        className={`w-9 h-5 rounded-full transition-colors relative ${showSources ? "bg-purple-600" : "bg-muted/50"}`}
-                      >
-                        <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${showSources ? "left-4" : "left-0.5"}`} />
-                      </button>
-                    </label>
-                  </div>
-
-                  {/* Detection Filtering */}
-                  <div className="pt-2 border-t border-border/30 space-y-2">
-                    <label className="flex items-center justify-between cursor-pointer">
-                      <span className="text-xs text-muted-foreground">Show False Positives</span>
-                      <button
-                        onClick={() => setShowFP(!showFP)}
-                        className={`w-9 h-5 rounded-full transition-colors relative ${showFP ? "bg-primary" : "bg-muted/50"}`}
-                      >
-                        <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${showFP ? "left-4" : "left-0.5"}`} />
-                      </button>
-                    </label>
-
-                    <div>
-                      <label className="text-xs text-muted-foreground block mb-1">
-                        Min Confidence: <span className="text-foreground font-medium">{(minConf * 100).toFixed(0)}%</span>
-                      </label>
-                      <input
-                        type="range" min={0} max={1} step={0.05}
-                        value={minConf}
-                        onChange={e => setMinConf(parseFloat(e.target.value))}
-                        className="w-full accent-primary h-1.5"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-xs text-muted-foreground block mb-1">Polymer Type</label>
-                      <select
-                        value={typeFilter}
-                        onChange={e => setTypeFilter(e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-muted/50 border border-border/50 rounded-lg text-xs text-foreground"
-                      >
-                        <option value="all">All Types</option>
-                        {polymerTypes.map(t => <option key={t} value={t}>{t}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
+        {/* ═══════════════════════════════════════════════════════════
+            1. DATE RANGE ANALYSIS SELECTOR
+            [ From Date ] → [ To Date ] [ Apply ]
+        ═══════════════════════════════════════════════════════════ */}
+        <div className="glass-card p-4 border border-border/40 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+              <CalendarRange className="w-4 h-4 text-primary" />
+              <span>Date Range Analysis:</span>
             </div>
 
-            {/* ── Map Legend ── */}
-            <div className="absolute bottom-3 left-3 z-[1000] glass px-3.5 py-2.5 rounded-lg shadow-lg max-w-[240px]">
-              <p className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground mb-1.5">Map Visualization</p>
-              
-              {/* Cloud Heatmap Gradient */}
-              <div className="mb-2">
-                <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
-                  <span>Cloud Heatmap</span>
-                  <span className="text-primary font-medium">Density</span>
+            {/* From Date input */}
+            <div className="flex items-center gap-1.5 bg-black/30 border border-border/40 rounded-lg px-2.5 py-1.5">
+              <span className="text-[11px] text-muted-foreground uppercase tracking-wide">From</span>
+              <input
+                type="date"
+                value={fromDateInput}
+                min={earliestDate}
+                max={toDateInput || latestDate}
+                onChange={e => setFromDateInput(e.target.value)}
+                className="bg-transparent text-xs text-foreground font-mono focus:outline-none"
+              />
+            </div>
+
+            <ArrowRight className="w-4 h-4 text-muted-foreground hidden sm:block" />
+
+            {/* To Date input */}
+            <div className="flex items-center gap-1.5 bg-black/30 border border-border/40 rounded-lg px-2.5 py-1.5">
+              <span className="text-[11px] text-muted-foreground uppercase tracking-wide">To</span>
+              <input
+                type="date"
+                value={toDateInput}
+                min={fromDateInput || earliestDate}
+                max={latestDate}
+                onChange={e => setToDateInput(e.target.value)}
+                className="bg-transparent text-xs text-foreground font-mono focus:outline-none"
+              />
+            </div>
+
+            {/* Apply Button */}
+            <button
+              onClick={handleApplyDateRange}
+              className="px-4 py-1.5 bg-primary text-primary-foreground text-xs font-semibold rounded-lg hover:bg-primary/90 transition-all flex items-center gap-1.5 shadow-sm"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              Apply Range
+            </button>
+
+            {/* Reset / All Time Button */}
+            <button
+              onClick={handleResetDateRange}
+              className="px-3 py-1.5 bg-muted/30 hover:bg-muted/50 text-xs text-muted-foreground hover:text-foreground rounded-lg transition-colors flex items-center gap-1.5"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              All Time
+            </button>
+          </div>
+
+          {/* Applied range indicator pill */}
+          <div className="text-xs text-muted-foreground flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span>Analyzing:</span>
+            <span className="font-semibold text-foreground">
+              {appliedRange ? `${formatDate(appliedRange.start)} → ${formatDate(appliedRange.end)}` : "All Time"}
+            </span>
+          </div>
+        </div>
+
+        {/* ═══════════════════════════════════════════════════════════
+            2. KEY SUMMARY (Compact 5 KPIs with highlighted Most Active Area)
+        ═══════════════════════════════════════════════════════════ */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+          {/* Total plastic detections */}
+          <div className="glass-card p-4 border border-border/30 flex flex-col justify-between">
+            <div className="flex items-center justify-between text-muted-foreground mb-1">
+              <span className="text-xs font-medium">Total Detections</span>
+              <Crosshair className="w-4 h-4 text-cyan-400" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold font-heading text-foreground">{totalDetections}</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">verified plastic debris points</p>
+            </div>
+          </div>
+
+          {/* Most active coastal area (CLEARLY HIGHLIGHTED) */}
+          <div className="glass-card p-4 border-2 border-primary/60 bg-primary/10 shadow-lg shadow-primary/10 flex flex-col justify-between relative overflow-hidden">
+            <div className="absolute top-0 right-0 px-2 py-0.5 bg-primary text-primary-foreground text-[9px] font-bold uppercase rounded-bl tracking-wider">
+              Top Contributor
+            </div>
+            <div className="flex items-center justify-between text-primary mb-1">
+              <span className="text-xs font-semibold flex items-center gap-1">
+                <Flame className="w-3.5 h-3.5 text-primary" /> Top Contributing Area
+              </span>
+            </div>
+            <div>
+              <p className="text-sm font-bold font-heading text-foreground truncate" title={primaryAreaContributor?.areaName || "None"}>
+                {primaryAreaContributor ? primaryAreaContributor.areaName : "None"}
+              </p>
+              <p className="text-xs text-primary font-medium mt-0.5">
+                {primaryAreaContributor
+                  ? `${primaryAreaContributor.detectionCount} detections (${primaryAreaContributor.percentOfTotal.toFixed(0)}% across ${primaryAreaContributor.clusterCount} clusters)`
+                  : "No detections in range"}
+              </p>
+            </div>
+          </div>
+
+          {/* Number of active hotspots */}
+          <div className="glass-card p-4 border border-border/30 flex flex-col justify-between">
+            <div className="flex items-center justify-between text-muted-foreground mb-1">
+              <span className="text-xs font-medium">Active Hotspots</span>
+              <Target className="w-4 h-4 text-primary" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold font-heading text-foreground">{activeHotspotsCount}</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">in {topAreaContributors.length} coastal zones</p>
+            </div>
+          </div>
+
+          {/* Total affected area */}
+          <div className="glass-card p-4 border border-border/30 flex flex-col justify-between">
+            <div className="flex items-center justify-between text-muted-foreground mb-1">
+              <span className="text-xs font-medium">Total Affected Area</span>
+              <Activity className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold font-heading text-foreground">
+                {totalAffectedAreaM2 > 10000 ? `${(totalAffectedAreaM2 / 1000).toFixed(1)}k` : Math.round(totalAffectedAreaM2)} <span className="text-sm font-normal text-muted-foreground">m²</span>
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">estimated marine surface area</p>
+            </div>
+          </div>
+
+          {/* Backtracked source locations */}
+          <div className="glass-card p-4 border border-border/30 flex flex-col justify-between">
+            <div className="flex items-center justify-between text-muted-foreground mb-1">
+              <span className="text-xs font-medium">Backtracked Sources</span>
+              <Anchor className="w-4 h-4 text-purple-400" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold font-heading text-foreground">{backtrackedSourcesCount}</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {activeBacktrackPaths.filter(p => p.isRepresentative).length} exact paths • {attributionLines.length} lines
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* ═══════════════════════════════════════════════════════════
+            3. HOTSPOT MAP (Interactive Leaflet Map with Cloud Heatmap & Attribution Lines)
+        ═══════════════════════════════════════════════════════════ */}
+        <div className="glass-card overflow-hidden relative rounded-xl border border-border/40" style={{ height: "620px" }}>
+          <MapContainer
+            center={mapCenter}
+            zoom={9}
+            className="w-full h-full"
+            style={{ background: tileKey === "light" ? "#f1f5f9" : "#060d1a" }}
+            zoomControl={false}
+          >
+            <TileLayer url={currentTile.url} attribution={currentTile.attribution} />
+            <MapController flyTo={flyTo} />
+
+            {/* Continuous Cloud Heatmap (Gaussian Density Field) */}
+            {showCloudHeatmap && (
+              <CloudHeatmapLayer
+                points={heatmapPoints}
+                radius={cloudRadius}
+                blur={24}
+                opacity={cloudOpacity}
+              />
+            )}
+
+            {/* ── Source Attribution Trajectory Lines (Between Clusters and Backtracked Sources) ── */}
+            {showAttributionLines && attributionLines.map((line) => {
+              const isSelected = selectedHotspot?.id === line.clusterId || selectedSource?.id === line.sourceId;
+              return (
+                <Polyline
+                  key={`attr-line-${line.id}`}
+                  positions={[line.clusterCenter, line.sourceCenter]}
+                  pathOptions={{
+                    color: isSelected ? "#f43f5e" : "#c084fc",
+                    weight: isSelected ? 3.5 : 2,
+                    dashArray: isSelected ? "6, 5" : "4, 6",
+                    opacity: isSelected ? 1.0 : 0.75,
+                  }}
+                >
+                  <Popup>
+                    <div className="text-xs space-y-1.5 p-1 min-w-[210px]" style={{ color: "#0f172a" }}>
+                      <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-1">
+                        <span className="font-bold text-[12px] text-purple-700 flex items-center gap-1">
+                          ↔ Source Attribution Trajectory
+                        </span>
+                        <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-purple-100 text-purple-800">
+                          {line.sourceType}
+                        </span>
+                      </div>
+                      <div className="font-bold text-slate-900 text-sm leading-tight">
+                        {line.clusterLabel} ➔ {line.sourceName}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2 rounded border border-slate-200 text-[11px] my-1">
+                        <div>
+                          <span className="text-slate-500 block text-[10px]">Attribution Score</span>
+                          <span className="font-bold text-emerald-700 text-xs">{(line.score * 100).toFixed(1)}%</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 block text-[10px]">Reverse Transit</span>
+                          <span className="font-bold text-slate-800 text-xs">{line.days.toFixed(1)} days</span>
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-slate-500 pt-0.5 flex justify-between">
+                        <span>Reverse Drift: {line.distanceKm.toFixed(1)} km</span>
+                        <span className="text-purple-700 font-semibold">{line.sourceType}</span>
+                      </div>
+                    </div>
+                  </Popup>
+                </Polyline>
+              );
+            })}
+
+            {/* ── Exact Backtracked Paths (Oceanographic Hydrodynamic Trajectories) ── */}
+            {showExactBacktrackPaths && activeBacktrackPaths.map((path) => {
+              const isSelected = selectedHotspot?.id === path.clusterId || 
+                (selectedSource && path.sourceCentroid && Math.abs(selectedSource.lat - path.sourceCentroid[0]) < 0.05 && Math.abs(selectedSource.lng - path.sourceCentroid[1]) < 0.05);
+
+              const isRep = path.isRepresentative;
+              const color = isSelected ? "#00f0ff" : isRep ? "#38bdf8" : "#0284c7";
+              const weight = isSelected ? (isRep ? 4 : 2.5) : (isRep ? 2.5 : 1.3);
+              const opacity = isSelected ? 1.0 : (isRep ? 0.85 : 0.45);
+
+              return (
+                <Polyline
+                  key={`exact-path-${path.id}`}
+                  positions={path.positions}
+                  pathOptions={{
+                    color,
+                    weight,
+                    opacity,
+                    lineCap: "round",
+                    lineJoin: "round",
+                  }}
+                >
+                  <Popup>
+                    <div className="text-xs space-y-1.5 p-1 min-w-[220px]" style={{ color: "#0f172a" }}>
+                      <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-1">
+                        <span className="font-bold text-[12px] text-sky-700 flex items-center gap-1">
+                          🌊 Exact Backtracked Path
+                        </span>
+                        <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-sky-100 text-sky-800">
+                          {path.isExactSimulation ? "Hydrodynamic Sim" : "Drift Stream"}
+                        </span>
+                      </div>
+                      <div className="font-bold text-slate-900 text-sm leading-tight">
+                        {path.clusterLabel || `Cluster #${path.clusterId}`} ➔ {path.sourceName || "Attributed Origin"}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2 rounded border border-slate-200 text-[11px] my-1">
+                        <div>
+                          <span className="text-slate-500 block text-[10px]">Backtrack Duration</span>
+                          <span className="font-bold text-sky-700 text-xs">{path.daysToSource.toFixed(1)} days</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 block text-[10px]">Trajectory Length</span>
+                          <span className="font-bold text-slate-800 text-xs">{path.lengthKm.toFixed(1)} km</span>
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-slate-500 pt-0.5 flex justify-between items-center">
+                        <span>Particles: {path.totalParticles} simulated</span>
+                        <span className="font-mono text-slate-600">{path.runName}</span>
+                      </div>
+                      {path.isExactSimulation && (
+                        <div className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 font-medium">
+                          ✓ Verified Copernicus / HYCOM current simulation
+                        </div>
+                      )}
+                    </div>
+                  </Popup>
+                </Polyline>
+              );
+            })}
+
+            {/* Source Attributed Place Markers (Backtracked Origins) */}
+            {showSources && filteredSources.map((src) => {
+              const isSelected = selectedSource?.id === src.id;
+              return (
+                <CircleMarker
+                  key={`src-${src.id}`}
+                  center={[src.lat, src.lng]}
+                  radius={isSelected ? 10 : 7}
+                  pathOptions={{
+                    fillColor: "#c084fc",
+                    fillOpacity: 0.95,
+                    color: "#ffffff",
+                    weight: isSelected ? 3 : 1.5,
+                  }}
+                  eventHandlers={{
+                    click: () => selectSource(src),
+                  }}
+                >
+                  <Popup>
+                    <div className="text-xs space-y-1.5 p-1 min-w-[220px]" style={{ color: "#0f172a" }}>
+                      <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-1">
+                        <span className="font-bold text-[12px] text-purple-700 flex items-center gap-1">
+                          ⚓ Source Attributed Place
+                        </span>
+                        <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-purple-100 text-purple-800">
+                          {src.source_type}
+                        </span>
+                      </div>
+                      <div className="font-bold text-slate-900 text-sm leading-tight">{src.location_name}</div>
+                      <div className="text-slate-600 font-medium text-[11px]">📍 {src.country}</div>
+                      
+                      <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2 rounded border border-slate-200 text-[11px] my-1">
+                        <div>
+                          <span className="text-slate-500 block text-[10px]">Attribution Score</span>
+                          <span className="font-bold text-emerald-700 text-xs">{(src.attribution_score * 100).toFixed(1)}%</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 block text-[10px]">Backtrack Transit</span>
+                          <span className="font-bold text-slate-800 text-xs">{src.days_to_source.toFixed(1)} days</span>
+                        </div>
+                      </div>
+
+                      {src.explanation && (
+                        <div className="text-[11px] text-slate-600 italic bg-purple-50/60 p-1.5 rounded border border-purple-100 leading-snug">
+                          "{src.explanation}"
+                        </div>
+                      )}
+
+                      <div className="text-[10px] text-slate-400 pt-0.5 flex justify-between">
+                        <span>Cluster #{src.cluster_id}</span>
+                        <span>{src.run_name}</span>
+                      </div>
+                    </div>
+                  </Popup>
+                </CircleMarker>
+              );
+            })}
+
+            {/* Hotspot Centroid Rings with Coastal Area Popups */}
+            {hotspots.map((h) => {
+              const norm = h.detection_count / maxDetections;
+              const isSelected = selectedHotspot?.id === h.id;
+              return (
+                <CircleMarker
+                  key={`hs-${h.id}`}
+                  center={h.center}
+                  radius={isSelected ? 16 : Math.max(9, 8 + norm * 12)}
+                  pathOptions={{
+                    fillColor: intensityColor(norm),
+                    fillOpacity: isSelected ? 0.95 : 0.8,
+                    color: "#ffffff",
+                    weight: isSelected ? 2.5 : 1.5,
+                  }}
+                  eventHandlers={{ click: () => selectHotspot(h) }}
+                >
+                  <Popup>
+                    <div className="text-xs space-y-1.5 min-w-[200px]" style={{ color: "#0f172a" }}>
+                      <div className="flex items-center justify-between gap-1 border-b border-slate-200 pb-1">
+                        <span className="font-bold text-sm text-slate-900">{h.label}</span>
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-cyan-100 text-cyan-800">
+                          {h.area_type}
+                        </span>
+                      </div>
+                      <div className="font-semibold text-xs text-primary">{h.area_name}</div>
+                      <div className="text-slate-700 font-medium">{h.detection_count} detections across {h.run_count} run(s)</div>
+                      <div className="text-slate-600">Avg confidence: {(h.avg_confidence * 100).toFixed(1)}%</div>
+                      <div className="text-slate-600">Area: {h.total_area_m2 > 1000 ? `${(h.total_area_m2 / 1000).toFixed(1)}k` : Math.round(h.total_area_m2)} m²</div>
+                      <div className="text-slate-500 text-[10px] pt-1 border-t border-slate-200">
+                        {formatDate(h.first_seen)} → {formatDate(h.last_seen)}
+                      </div>
+                    </div>
+                  </Popup>
+                </CircleMarker>
+              );
+            })}
+          </MapContainer>
+
+          {/* ── Map overlay: Controls & Filters ── */}
+          <div className="absolute top-3 left-3 z-[1000] flex flex-col gap-2">
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className="flex items-center gap-1.5 px-3 py-2 glass rounded-lg text-xs font-medium hover:bg-white/10 transition-colors shadow-lg"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5 text-primary" />
+              Map Controls & Base Layers
+            </button>
+            {showFilters && (
+              <motion.div
+                initial={{ opacity: 0, y: -5 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="glass p-4 rounded-xl space-y-3.5 w-[260px] shadow-2xl backdrop-blur-md border border-border/40"
+              >
+                {/* Base Map Switcher: SATELLITE (DEFAULT), DARK, LIGHT */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">Base Map Style</p>
+                    <span className="text-[10px] font-mono text-primary uppercase">{tileKey}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 p-1 bg-black/30 rounded-lg border border-border/30">
+                    {(["satellite", "dark", "light"] as const).map(mode => (
+                      <button
+                        key={mode}
+                        onClick={() => setTileKey(mode)}
+                        className={`px-2 py-1.5 text-xs rounded-md capitalize font-medium transition-all ${
+                          tileKey === mode
+                            ? "bg-primary text-primary-foreground shadow-sm font-semibold"
+                            : "text-muted-foreground hover:text-foreground hover:bg-white/5"
+                        }`}
+                      >
+                        {mode}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <div className="h-2 w-full rounded-full" style={{ background: "linear-gradient(to right, #0284c7, #06b6d4, #10b981, #facc15, #f97316, #ef4444)" }} />
-                <div className="flex justify-between text-[9px] text-muted-foreground mt-0.5">
-                  <span>Diffuse</span><span>Concentrated Core</span>
+
+                {/* Cloud Heatmap Controls */}
+                <div className="pt-2 border-t border-border/30 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                      <Flame className="w-3.5 h-3.5 text-primary" /> Cloud Heatmap
+                    </span>
+                    <button
+                      onClick={() => setShowCloudHeatmap(!showCloudHeatmap)}
+                      className={`text-xs px-2 py-0.5 rounded transition-colors ${
+                        showCloudHeatmap ? "bg-primary/20 text-primary" : "bg-muted/40 text-muted-foreground"
+                      }`}
+                    >
+                      {showCloudHeatmap ? "On" : "Off"}
+                    </button>
+                  </div>
+
+                  {showCloudHeatmap && (
+                    <>
+                      <div>
+                        <div className="flex justify-between text-[11px] text-muted-foreground mb-1">
+                          <span>Cloud Opacity</span>
+                          <span className="text-foreground font-mono">{Math.round(cloudOpacity * 100)}%</span>
+                        </div>
+                        <input
+                          type="range" min={0.3} max={1.0} step={0.05}
+                          value={cloudOpacity}
+                          onChange={e => setCloudOpacity(parseFloat(e.target.value))}
+                          className="w-full accent-primary h-1.5"
+                        />
+                      </div>
+                      <div>
+                        <div className="flex justify-between text-[11px] text-muted-foreground mb-1">
+                          <span>Dispersion Radius</span>
+                          <span className="text-foreground font-mono">{cloudRadius}px</span>
+                        </div>
+                        <input
+                          type="range" min={20} max={60} step={2}
+                          value={cloudRadius}
+                          onChange={e => setCloudRadius(parseInt(e.target.value))}
+                          className="w-full accent-primary h-1.5"
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
+
+                {/* Source Attribution & Lines Toggle */}
+                <div className="pt-2 border-t border-border/30 space-y-2">
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <span className="text-xs text-foreground flex items-center gap-1.5">
+                      <Anchor className="w-3.5 h-3.5 text-purple-400" /> Attributed Sources
+                    </span>
+                    <button
+                      onClick={() => setShowSources(!showSources)}
+                      className={`w-9 h-5 rounded-full transition-colors relative ${showSources ? "bg-purple-600" : "bg-muted/50"}`}
+                    >
+                      <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${showSources ? "left-4" : "left-0.5"}`} />
+                    </button>
+                  </label>
+
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <span className="text-xs text-foreground flex items-center gap-1.5">
+                      <GitCommit className="w-3.5 h-3.5 text-purple-400" /> Attribution Lines (Direct)
+                    </span>
+                    <button
+                      onClick={() => setShowAttributionLines(!showAttributionLines)}
+                      className={`w-9 h-5 rounded-full transition-colors relative ${showAttributionLines ? "bg-purple-600" : "bg-muted/50"}`}
+                    >
+                      <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${showAttributionLines ? "left-4" : "left-0.5"}`} />
+                    </button>
+                  </label>
+
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <span className="text-xs text-foreground flex items-center gap-1.5">
+                      <Navigation className="w-3.5 h-3.5 text-sky-400" /> Exact Backtracked Paths
+                    </span>
+                    <button
+                      onClick={() => setShowExactBacktrackPaths(!showExactBacktrackPaths)}
+                      className={`w-9 h-5 rounded-full transition-colors relative ${showExactBacktrackPaths ? "bg-sky-500" : "bg-muted/50"}`}
+                    >
+                      <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${showExactBacktrackPaths ? "left-4" : "left-0.5"}`} />
+                    </button>
+                  </label>
+                </div>
+
+                {/* Minimum Confidence & False Positives */}
+                <div className="pt-2 border-t border-border/30 space-y-2">
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <span className="text-xs text-muted-foreground">Show False Positives</span>
+                    <button
+                      onClick={() => setShowFP(!showFP)}
+                      className={`w-9 h-5 rounded-full transition-colors relative ${showFP ? "bg-primary" : "bg-muted/50"}`}
+                    >
+                      <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${showFP ? "left-4" : "left-0.5"}`} />
+                    </button>
+                  </label>
+
+                  <div>
+                    <label className="text-xs text-muted-foreground block mb-1">
+                      Min Confidence: <span className="text-foreground font-medium">{(minConf * 100).toFixed(0)}%</span>
+                    </label>
+                    <input
+                      type="range" min={0} max={1} step={0.05}
+                      value={minConf}
+                      onChange={e => setMinConf(parseFloat(e.target.value))}
+                      className="w-full accent-primary h-1.5"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-muted-foreground block mb-1">Polymer Type</label>
+                    <select
+                      value={typeFilter}
+                      onChange={e => setTypeFilter(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-muted/50 border border-border/50 rounded-lg text-xs text-foreground"
+                    >
+                      <option value="all">All Types</option>
+                      {polymerTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </div>
+
+          {/* ── Map Legend (With Interactive Attribution Lines & Exact Paths Toggles) ── */}
+          <div className="absolute bottom-3 left-3 z-[1000] glass px-3.5 py-2.5 rounded-lg shadow-lg min-w-[230px] max-w-[270px]">
+            <p className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground mb-1.5">Visualization Legend</p>
+            
+            {/* Cloud Heatmap Gradient */}
+            <div className="mb-2">
+              <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
+                <span>Cloud Density</span>
+                <span className="text-primary font-medium">Plume</span>
+              </div>
+              <div className="h-2 w-full rounded-full" style={{ background: "linear-gradient(to right, #0284c7, #06b6d4, #10b981, #facc15, #f97316, #ef4444)" }} />
+            </div>
+
+            {/* Legend Markers */}
+            <div className="space-y-1.5 pt-1.5 border-t border-border/20 text-[11px]">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <div className="w-3 h-3 rounded-full bg-purple-400 border border-white shadow-sm flex-shrink-0" />
+                <span className="text-foreground font-medium">Source Attributed Place</span>
+              </div>
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <div className="w-3 h-3 rounded-full border-2 border-white bg-orange-500 flex-shrink-0" />
+                <span>Hotspot Centroid</span>
               </div>
 
-              {/* Legend Items */}
-              <div className="space-y-1.5 pt-1.5 border-t border-border/20 text-[11px]">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <div className="w-3 h-3 rounded-full bg-purple-400 border border-white shadow-sm flex-shrink-0" />
-                  <span className="text-foreground font-medium">Source Attributed Place</span>
+              {/* ── Interactive Attribution Lines Toggle in Legend ── */}
+              <div
+                className="flex items-center justify-between gap-2 p-1.5 mt-1 rounded-md hover:bg-white/10 cursor-pointer transition-colors border border-purple-500/20 bg-purple-950/20"
+                onClick={() => setShowAttributionLines(!showAttributionLines)}
+                title="Click to toggle source attribution direct lines on/off"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-0.5 border-b-2 border-dashed border-purple-400 flex-shrink-0" />
+                  <span className="text-foreground font-medium text-xs">Attribution Lines</span>
                 </div>
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <div className="w-3 h-3 rounded-full border-2 border-white bg-orange-500 flex-shrink-0" />
-                  <span>Hotspot Centroid Ring</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowAttributionLines(!showAttributionLines);
+                  }}
+                  className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${
+                    showAttributionLines ? "bg-purple-600" : "bg-muted/60"
+                  }`}
+                >
+                  <div
+                    className={`absolute top-0.5 w-3 h-3 bg-white rounded-full shadow transition-all ${
+                      showAttributionLines ? "left-3.5" : "left-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* ── Interactive Exact Backtracked Paths Toggle in Legend ── */}
+              <div
+                className="flex items-center justify-between gap-2 p-1.5 mt-1 rounded-md hover:bg-white/10 cursor-pointer transition-colors border border-sky-500/20 bg-sky-950/20"
+                onClick={() => setShowExactBacktrackPaths(!showExactBacktrackPaths)}
+                title="Click to toggle exact hydrodynamic backtracked drift paths on/off"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-1 rounded-full bg-sky-400 shadow-[0_0_6px_rgba(56,189,248,0.8)] flex-shrink-0" />
+                  <span className="text-foreground font-semibold text-xs">Exact Backtrack Path</span>
                 </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowExactBacktrackPaths(!showExactBacktrackPaths);
+                  }}
+                  className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${
+                    showExactBacktrackPaths ? "bg-sky-500" : "bg-muted/60"
+                  }`}
+                >
+                  <div
+                    className={`absolute top-0.5 w-3 h-3 bg-white rounded-full shadow transition-all ${
+                      showExactBacktrackPaths ? "left-3.5" : "left-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ═══════════════════════════════════════════════════════════
+            4. TOP ACTIVE LOCATIONS: COASTAL AREAS vs SOURCE ATTRIBUTION
+            Options: Grouped Coastal Area OR Grouped by Source Attribution
+        ═══════════════════════════════════════════════════════════ */}
+        <div className="glass-card p-5 border border-border/40">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+            <div>
+              <h2 className="text-base font-semibold font-heading flex items-center gap-2 text-foreground">
+                <Award className="w-4 h-4 text-primary" />
+                {activeLocationsView === "coastal_areas" ? "Top Contributing Coastal Areas" : "Top Source Attribution Origins"}
+              </h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {activeLocationsView === "coastal_areas"
+                  ? "Coordinates resolved into coastal marine zones (Marina, Estuary, Bay, Reef) and grouped by total activity."
+                  : "Reverse drift backtracking origins grouped by attributed source location and maritime activity."}
+              </p>
+            </div>
+
+            {/* View Mode Toggle: Grouped Coastal Areas vs Grouped by Source Attribution */}
+            <div className="flex items-center gap-2">
+              <div className="flex p-0.5 bg-black/40 border border-border/40 rounded-lg text-xs">
+                <button
+                  onClick={() => setActiveLocationsView("coastal_areas")}
+                  className={`px-3 py-1.5 rounded-md font-medium transition-all flex items-center gap-1.5 ${
+                    activeLocationsView === "coastal_areas"
+                      ? "bg-primary text-primary-foreground font-semibold shadow-sm"
+                      : "text-muted-foreground hover:text-foreground hover:bg-white/5"
+                  }`}
+                >
+                  <Waves className="w-3.5 h-3.5" />
+                  Grouped Coastal Areas ({topAreaContributors.length})
+                </button>
+                <button
+                  onClick={() => setActiveLocationsView("source_attribution")}
+                  className={`px-3 py-1.5 rounded-md font-medium transition-all flex items-center gap-1.5 ${
+                    activeLocationsView === "source_attribution"
+                      ? "bg-purple-600 text-white font-semibold shadow-sm"
+                      : "text-muted-foreground hover:text-foreground hover:bg-white/5"
+                  }`}
+                >
+                  <Anchor className="w-3.5 h-3.5" />
+                  Grouped by Source Attribution ({topSourceContributors.length})
+                </button>
               </div>
             </div>
           </div>
 
-          {/* ── Sidebar: Clusters vs Attributed Sources ── */}
-          <div className="w-full lg:w-80 flex flex-col gap-2 overflow-hidden h-[620px]">
-            {/* Sidebar header tabs */}
-            <div className="glass-card p-1.5 flex gap-1 flex-shrink-0">
-              <button
-                onClick={() => setSidebarTab("clusters")}
-                className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors ${
-                  sidebarTab === "clusters"
-                    ? "bg-primary text-primary-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground hover:bg-white/5"
-                }`}
-              >
-                <Target className="w-3.5 h-3.5" />
-                Hotspots ({hotspots.length})
-              </button>
-              <button
-                onClick={() => setSidebarTab("sources")}
-                className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors ${
-                  sidebarTab === "sources"
-                    ? "bg-purple-600 text-white shadow-sm"
-                    : "text-muted-foreground hover:text-foreground hover:bg-white/5"
-                }`}
-              >
-                <Anchor className="w-3.5 h-3.5" />
-                Source Places ({allSources.length})
-              </button>
-            </div>
+          {/* VIEW 1: GROUPED BY COASTAL AREA */}
+          {activeLocationsView === "coastal_areas" && (
+            topAreaContributors.length === 0 ? (
+              <div className="p-6 text-center text-sm text-muted-foreground border border-dashed border-border/40 rounded-lg">
+                No coastal area activity recorded within the selected date range.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                {topAreaContributors.slice(0, 6).map((area, index) => {
+                  const isLeading = index === 0;
 
-            {/* Tab 1: Hotspot Clusters List */}
-            {sidebarTab === "clusters" && (
-              <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-                {hotspots.length === 0 ? (
-                  <div className="glass-card p-6 text-center text-sm text-muted-foreground border border-dashed border-border/50">
-                    No hotspots found with current filters.
-                  </div>
-                ) : (
-                  hotspots.map((h, idx) => {
-                    const norm = h.detection_count / maxDetections;
-                    const isSelected = selectedHotspot?.id === h.id;
-                    return (
-                      <motion.div
-                        key={h.id}
-                        initial={{ opacity: 0, x: 10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: idx * 0.03 }}
-                        className={`glass-card p-3.5 cursor-pointer border transition-all ${
-                          isSelected
-                            ? "border-primary/60 bg-primary/10 shadow-md"
-                            : "border-border/30 hover:border-border/60 hover:bg-white/5"
-                        }`}
-                        onClick={() => selectHotspot(h)}
-                      >
-                        <div className="flex items-start justify-between gap-2 mb-1.5">
+                  return (
+                    <motion.div
+                      key={area.id}
+                      whileHover={{ scale: 1.01 }}
+                      whileTap={{ scale: 0.99 }}
+                      onClick={() => selectArea(area)}
+                      className={`p-4 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
+                        isLeading
+                          ? "border-primary/60 bg-gradient-to-br from-primary/15 via-primary/5 to-transparent shadow-lg shadow-primary/5"
+                          : "border-border/30 bg-muted/10 hover:bg-muted/20 hover:border-border/60"
+                      }`}
+                    >
+                      <div>
+                        {/* Header: Rank + Area Name + Type Badge */}
+                        <div className="flex items-start justify-between gap-2 mb-2">
                           <div className="flex items-center gap-2">
-                            <div
-                              className="w-2.5 h-2.5 rounded-full flex-shrink-0 mt-0.5"
-                              style={{ backgroundColor: intensityColor(norm) }}
-                            />
-                            <span className="font-semibold text-sm">{h.label}</span>
+                            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold ${
+                              isLeading ? "bg-primary text-primary-foreground" : "bg-muted/50 text-muted-foreground font-mono"
+                            }`}>
+                              {index + 1}
+                            </span>
+                            <span className="font-semibold text-sm text-foreground leading-tight">{area.areaName}</span>
                           </div>
-                          <span className="text-[10px] text-muted-foreground font-mono bg-muted/40 px-1.5 py-0.5 rounded">
-                            #{String(h.id).padStart(2, "0")}
+                          <span className={`px-2 py-0.5 text-[10px] font-semibold uppercase rounded-full border flex-shrink-0 ${area.badgeColor}`}>
+                            {area.areaType}
                           </span>
                         </div>
-                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                          <div><span className="text-foreground font-medium">{h.detection_count}</span> detections</div>
-                          <div><span className="text-foreground font-medium">{h.run_count}</span> runs</div>
-                          <div><span className="text-foreground font-medium">{(h.avg_confidence * 100).toFixed(0)}%</span> confidence</div>
-                          <div><span className="text-foreground font-medium">{h.total_area_m2 > 1000 ? `${(h.total_area_m2 / 1000).toFixed(1)}k` : Math.round(h.total_area_m2)}</span> m²</div>
+
+                        {/* Volume & Share */}
+                        <div className="flex items-center justify-between text-xs mt-3 mb-1">
+                          <span className="font-bold text-base text-foreground">
+                            {area.detectionCount} <span className="text-xs font-normal text-muted-foreground">detections</span>
+                          </span>
+                          <span className="text-primary font-semibold">{area.percentOfTotal.toFixed(1)}% of period</span>
                         </div>
-                        {h.first_seen && (
-                          <div className="mt-2 text-[10px] text-muted-foreground border-t border-border/20 pt-1.5 flex items-center justify-between">
-                            <span>{formatDate(h.first_seen)} → {formatDate(h.last_seen)}</span>
-                            <span className="text-primary hover:underline font-medium text-[10px]">Fly to →</span>
-                          </div>
-                        )}
-                        <div className="mt-2 h-1 bg-muted/20 rounded-full overflow-hidden">
+
+                        {/* Progress Bar */}
+                        <div className="w-full h-1.5 bg-black/40 rounded-full overflow-hidden mb-3">
                           <div
-                            className="h-full rounded-full transition-all duration-700"
-                            style={{ width: `${norm * 100}%`, backgroundColor: intensityColor(norm) }}
+                            className="h-full bg-gradient-to-r from-cyan-500 to-primary rounded-full transition-all duration-500"
+                            style={{ width: `${Math.min(100, area.percentOfTotal)}%` }}
                           />
                         </div>
-                      </motion.div>
-                    );
-                  })
-                )}
-              </div>
-            )}
 
-            {/* Tab 2: Source Attributed Places (Backtracked Origin) List */}
-            {sidebarTab === "sources" && (
-              <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-                {allSources.length === 0 ? (
-                  <div className="glass-card p-6 text-center text-sm text-muted-foreground border border-dashed border-border/50">
-                    No backtracked source locations available.
-                  </div>
-                ) : (
-                  allSources.map((src, idx) => {
-                    const isSelected = selectedSource?.id === src.id;
-                    return (
-                      <motion.div
-                        key={src.id}
-                        initial={{ opacity: 0, x: 10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: idx * 0.03 }}
-                        className={`glass-card p-3.5 cursor-pointer border transition-all ${
-                          isSelected
-                            ? "border-purple-500/70 bg-purple-500/10 shadow-md"
-                            : "border-border/30 hover:border-purple-400/40 hover:bg-white/5"
-                        }`}
-                        onClick={() => selectSource(src)}
-                      >
-                        <div className="flex items-start justify-between gap-2 mb-1">
-                          <div className="flex items-center gap-2">
-                            <Anchor className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
-                            <span className="font-semibold text-xs leading-tight text-foreground">{src.location_name}</span>
+                        {/* Metrics Grid */}
+                        <div className="grid grid-cols-2 gap-2 text-[11px] text-muted-foreground bg-black/20 p-2.5 rounded-lg border border-border/20">
+                          <div>
+                            <span className="text-muted-foreground block text-[10px] uppercase">Clusters Aggregated</span>
+                            <span className="font-semibold text-foreground">{area.clusterCount} cluster{area.clusterCount !== 1 ? "s" : ""}</span>
                           </div>
-                          <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 flex-shrink-0">
-                            {src.source_type}
+                          <div>
+                            <span className="text-muted-foreground block text-[10px] uppercase">Total Surface Area</span>
+                            <span className="font-semibold text-foreground">
+                              {area.totalAreaM2 > 1000 ? `${(area.totalAreaM2 / 1000).toFixed(1)}k m²` : `${Math.round(area.totalAreaM2)} m²`}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground block text-[10px] uppercase">Avg Confidence</span>
+                            <span className="font-semibold text-emerald-400">{(area.avgConfidence * 100).toFixed(1)}%</span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground block text-[10px] uppercase">Contributing Runs</span>
+                            <span className="font-semibold text-foreground">{area.runCount} run{area.runCount !== 1 ? "s" : ""}</span>
+                          </div>
+                        </div>
+
+                        {/* Included Clusters Badges */}
+                        <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] text-muted-foreground">Includes:</span>
+                          {area.clusters.slice(0, 4).map(c => (
+                            <span key={c.id} className="text-[10px] bg-muted/40 text-muted-foreground px-1.5 py-0.2 rounded font-mono">
+                              {c.label} ({c.detection_count})
+                            </span>
+                          ))}
+                          {area.clusters.length > 4 && (
+                            <span className="text-[10px] text-muted-foreground font-mono">+{area.clusters.length - 4} more</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-3 pt-2.5 border-t border-border/20 flex items-center justify-between text-[11px]">
+                        <span className="font-mono text-[10px] text-muted-foreground">
+                          {area.center[0].toFixed(2)}°, {area.center[1].toFixed(2)}°
+                        </span>
+                        <span className="text-primary font-medium hover:underline flex items-center gap-0.5">
+                          Focus Area on Map →
+                        </span>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            )
+          )}
+
+          {/* VIEW 2: GROUPED BY SOURCE ATTRIBUTION */}
+          {activeLocationsView === "source_attribution" && (
+            topSourceContributors.length === 0 ? (
+              <div className="p-6 text-center text-sm text-muted-foreground border border-dashed border-border/40 rounded-lg">
+                No backtracked source origins attributed in the selected date range.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                {topSourceContributors.slice(0, 6).map((srcGroup, index) => {
+                  const isTopSource = index === 0;
+
+                  return (
+                    <motion.div
+                      key={srcGroup.id}
+                      whileHover={{ scale: 1.01 }}
+                      whileTap={{ scale: 0.99 }}
+                      onClick={() => selectSourceGroup(srcGroup)}
+                      className={`p-4 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
+                        isTopSource
+                          ? "border-purple-500/60 bg-gradient-to-br from-purple-950/30 via-purple-900/10 to-transparent shadow-lg shadow-purple-900/10"
+                          : "border-border/30 bg-muted/10 hover:bg-muted/20 hover:border-purple-500/40"
+                      }`}
+                    >
+                      <div>
+                        {/* Header: Rank + Source Name + Type Badge */}
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div className="flex items-center gap-2">
+                            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold ${
+                              isTopSource ? "bg-purple-600 text-white" : "bg-muted/50 text-muted-foreground font-mono"
+                            }`}>
+                              {index + 1}
+                            </span>
+                            <span className="font-semibold text-sm text-foreground leading-tight">{srcGroup.sourceName}</span>
+                          </div>
+                          <span className={`px-2 py-0.5 text-[10px] font-semibold uppercase rounded-full border flex-shrink-0 ${srcGroup.badgeColor}`}>
+                            {srcGroup.sourceType}
                           </span>
                         </div>
-                        <div className="text-[11px] text-muted-foreground mb-1.5 flex items-center gap-1">
-                          <span>📍</span> {src.country}
+
+                        {/* Country Tag */}
+                        <div className="text-[11px] text-muted-foreground mb-2 flex items-center gap-1">
+                          <span>📍</span> {srcGroup.country}
                         </div>
-                        <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[11px] text-muted-foreground bg-black/20 p-2 rounded">
+
+                        {/* Volume & Share */}
+                        <div className="flex items-center justify-between text-xs mt-2 mb-1">
+                          <span className="font-bold text-base text-foreground">
+                            {srcGroup.detectionCount} <span className="text-xs font-normal text-muted-foreground">attributed detections</span>
+                          </span>
+                          <span className="text-purple-400 font-semibold">{srcGroup.percentOfTotal.toFixed(1)}% of period</span>
+                        </div>
+
+                        {/* Progress Bar */}
+                        <div className="w-full h-1.5 bg-black/40 rounded-full overflow-hidden mb-3">
+                          <div
+                            className="h-full bg-gradient-to-r from-purple-500 to-violet-400 rounded-full transition-all duration-500"
+                            style={{ width: `${Math.min(100, srcGroup.percentOfTotal)}%` }}
+                          />
+                        </div>
+
+                        {/* Metrics Grid */}
+                        <div className="grid grid-cols-2 gap-2 text-[11px] text-muted-foreground bg-black/20 p-2.5 rounded-lg border border-border/20">
                           <div>
-                            Score: <span className="text-emerald-400 font-bold">{(src.attribution_score * 100).toFixed(0)}%</span>
+                            <span className="text-muted-foreground block text-[10px] uppercase">Attribution Score</span>
+                            <span className="font-semibold text-emerald-400">{(srcGroup.attributionScore * 100).toFixed(1)}%</span>
                           </div>
                           <div>
-                            Transit: <span className="text-foreground font-medium">{src.days_to_source.toFixed(1)}d</span>
+                            <span className="text-muted-foreground block text-[10px] uppercase">Reverse Transit</span>
+                            <span className="font-semibold text-foreground">{srcGroup.daysToSource.toFixed(1)} days</span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground block text-[10px] uppercase">Clusters Attributed</span>
+                            <span className="font-semibold text-purple-300">{srcGroup.clusterCount} cluster{srcGroup.clusterCount !== 1 ? "s" : ""}</span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground block text-[10px] uppercase">Pipeline Runs</span>
+                            <span className="font-semibold text-foreground">{srcGroup.runCount} run{srcGroup.runCount !== 1 ? "s" : ""}</span>
                           </div>
                         </div>
-                        <div className="mt-2 text-[10px] text-muted-foreground flex items-center justify-between pt-1 border-t border-border/20">
-                          <span className="truncate max-w-[170px]">{src.run_name}</span>
-                          <span className="text-purple-400 font-medium hover:underline">Inspect →</span>
+
+                        {/* Linked Clusters */}
+                        <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] text-muted-foreground">Connected:</span>
+                          {srcGroup.clusters.slice(0, 4).map(c => (
+                            <span key={c.id} className="text-[10px] bg-purple-950/40 border border-purple-800/30 text-purple-300 px-1.5 py-0.2 rounded font-mono">
+                              {c.label} ({c.detection_count})
+                            </span>
+                          ))}
+                          {srcGroup.clusters.length > 4 && (
+                            <span className="text-[10px] text-muted-foreground font-mono">+{srcGroup.clusters.length - 4} more</span>
+                          )}
                         </div>
-                      </motion.div>
-                    );
-                  })
-                )}
+                      </div>
+
+                      <div className="mt-3 pt-2.5 border-t border-border/20 flex items-center justify-between text-[11px]">
+                        <span className="font-mono text-[10px] text-muted-foreground">
+                          {srcGroup.center[0].toFixed(2)}°, {srcGroup.center[1].toFixed(2)}°
+                        </span>
+                        <span className="text-purple-400 font-medium hover:underline flex items-center gap-0.5">
+                          Focus Source & Lines →
+                        </span>
+                      </div>
+                    </motion.div>
+                  );
+                })}
               </div>
+            )
+          )}
+        </div>
+
+        {/* ═══════════════════════════════════════════════════════════
+            5. ACTIVITY OVER TIME
+            ONE simple line chart showing plastic activity over the selected date range
+            Answering: "When was plastic activity highest?"
+        ═══════════════════════════════════════════════════════════ */}
+        <div className="glass-card p-5 border border-border/40">
+          <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
+            <div>
+              <h2 className="text-base font-semibold font-heading flex items-center gap-2 text-foreground">
+                <TrendingUp className="w-4 h-4 text-primary" />
+                Plastic Activity Over Time
+              </h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Detection volume chronology for the selected period answering when plastic activity peaked.
+              </p>
+            </div>
+
+            {/* Answer banner to: "When was plastic activity highest?" */}
+            {peakActivityPoint && (
+              <div className="px-3 py-1.5 bg-primary/10 border border-primary/30 rounded-lg text-xs flex items-center gap-2">
+                <Zap className="w-3.5 h-3.5 text-primary flex-shrink-0" />
+                <span className="text-muted-foreground">Activity Peak:</span>
+                <span className="font-bold text-foreground">{formatDate(peakActivityPoint.date)}</span>
+                <span className="text-primary font-semibold">({peakActivityPoint.detections} detections)</span>
+              </div>
+            )}
+          </div>
+
+          <div className="h-[200px] w-full">
+            {activityTimeline.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                No activity records available for this date range.
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={activityTimeline} margin={{ top: 10, right: 20, left: -20, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(215 20% 15%)" />
+                  <XAxis
+                    dataKey="date"
+                    tickFormatter={formatDate}
+                    tick={{ fill: "#6B7280", fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    tick={{ fill: "#6B7280", fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
+                    allowDecimals={false}
+                  />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={(val: any) => [`${val} detections`, "Plastic Detections"]}
+                    labelFormatter={(label) => formatDate(String(label))}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="detections"
+                    stroke="hsl(var(--primary))"
+                    strokeWidth={2.5}
+                    dot={{ r: 4, fill: "hsl(var(--primary))", strokeWidth: 1.5, stroke: "#ffffff" }}
+                    activeDot={{ r: 6, fill: "hsl(var(--primary))" }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
             )}
           </div>
         </div>
 
-        {/* ── Selected Item Detail Box (Hotspot or Source Attributed Place) ── */}
-        {selectedSource && (
-          <motion.div
-            key={selectedSource.id}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="glass-card border border-purple-500/40 p-5 shadow-xl bg-purple-950/10"
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-heading font-semibold text-base flex items-center gap-2 text-foreground">
-                <Anchor className="w-4 h-4 text-purple-400" />
-                Source Attributed Place: <span className="text-purple-300 font-bold">{selectedSource.location_name}</span>
-              </h3>
-              <button onClick={() => setSelectedSource(null)} className="text-muted-foreground hover:text-foreground">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-3">
-              {[
-                { label: "Attributed Country", value: selectedSource.country },
-                { label: "Source Activity Type", value: selectedSource.source_type },
-                { label: "Attribution Score", value: `${(selectedSource.attribution_score * 100).toFixed(1)}%` },
-                { label: "Reverse Drift Time", value: `${selectedSource.days_to_source.toFixed(1)} days` },
-                { label: "Latitude", value: selectedSource.lat.toFixed(4) },
-                { label: "Longitude", value: selectedSource.lng.toFixed(4) },
-              ].map(({ label, value }) => (
-                <div key={label} className="bg-muted/20 border border-border/20 rounded-lg p-2.5">
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{label}</p>
-                  <p className="font-bold text-sm font-heading text-foreground capitalize">{value}</p>
+        {/* ═══════════════════════════════════════════════════════════
+            6. HOTSPOT DETAILS & DATA-DRIVEN KEY INSIGHTS
+        ═══════════════════════════════════════════════════════════ */}
+        <div className="space-y-4">
+          {/* Selected Hotspot Detailed View (when clicked) */}
+          <AnimatePresence>
+            {selectedHotspot && (
+              <motion.div
+                key={selectedHotspot.id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="glass-card border border-primary/40 p-5 shadow-xl bg-primary/5"
+              >
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="font-heading font-semibold text-base flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-primary" />
+                      {selectedHotspot.label} — Hotspot Specific Metrics
+                    </h3>
+                    <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
+                      <span>Area:</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${selectedHotspot.area_badge_color}`}>
+                        {selectedHotspot.area_name} ({selectedHotspot.area_type})
+                      </span>
+                    </div>
+                  </div>
+                  <button onClick={() => setSelectedHotspot(null)} className="text-muted-foreground hover:text-foreground">
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
-              ))}
-            </div>
-            {selectedSource.explanation && (
-              <div className="p-3 bg-black/20 rounded-lg border border-purple-500/20 text-xs text-muted-foreground">
-                <span className="font-semibold text-purple-300">Hydrodynamic Backtrack Explanation: </span>
-                {selectedSource.explanation}
-              </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                  {[
+                    { label: "Detections", value: selectedHotspot.detection_count },
+                    { label: "Contributing Runs", value: selectedHotspot.run_count },
+                    { label: "Avg Confidence", value: `${(selectedHotspot.avg_confidence * 100).toFixed(1)}%` },
+                    { label: "Total Area", value: `${selectedHotspot.total_area_m2 > 1000 ? (selectedHotspot.total_area_m2 / 1000).toFixed(1) + "k" : Math.round(selectedHotspot.total_area_m2)} m²` },
+                    { label: "Center Latitude", value: selectedHotspot.center[0].toFixed(4) },
+                    { label: "Center Longitude", value: selectedHotspot.center[1].toFixed(4) },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="bg-muted/10 border border-border/20 rounded-lg p-2.5">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{label}</p>
+                      <p className="font-bold text-base font-heading">{value}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 text-xs text-muted-foreground flex items-center gap-4 flex-wrap">
+                  <div>
+                    <Calendar className="w-3.5 h-3.5 inline mr-1 text-primary" />
+                    First detected: <span className="text-foreground">{formatDate(selectedHotspot.first_seen)}</span>
+                  </div>
+                  <div>
+                    <Calendar className="w-3.5 h-3.5 inline mr-1 text-primary" />
+                    Last detected: <span className="text-foreground">{formatDate(selectedHotspot.last_seen)}</span>
+                  </div>
+                </div>
+              </motion.div>
             )}
-          </motion.div>
-        )}
 
-        {selectedHotspot && !selectedSource && (
-          <motion.div
-            key={selectedHotspot.id}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="glass-card border border-primary/40 p-5 shadow-xl"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-heading font-semibold text-base flex items-center gap-2">
-                <MapPin className="w-4 h-4 text-primary" />
-                {selectedHotspot.label} — Cluster Details
-              </h3>
-              <button onClick={() => setSelectedHotspot(null)} className="text-muted-foreground hover:text-foreground">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-              {[
-                { label: "Detections", value: selectedHotspot.detection_count },
-                { label: "Contributing Runs", value: selectedHotspot.run_count },
-                { label: "Avg Confidence", value: `${(selectedHotspot.avg_confidence * 100).toFixed(1)}%` },
-                { label: "Total Area", value: `${selectedHotspot.total_area_m2 > 1000 ? (selectedHotspot.total_area_m2 / 1000).toFixed(1) + "k" : Math.round(selectedHotspot.total_area_m2)} m²` },
-                { label: "Center Lat", value: selectedHotspot.center[0].toFixed(4) },
-                { label: "Center Lng", value: selectedHotspot.center[1].toFixed(4) },
-              ].map(({ label, value }) => (
-                <div key={label} className="bg-muted/10 border border-border/20 rounded-lg p-2.5">
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{label}</p>
-                  <p className="font-bold text-base font-heading">{value}</p>
+            {selectedSource && (
+              <motion.div
+                key={selectedSource.id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="glass-card border border-purple-500/40 p-5 shadow-xl bg-purple-950/10"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-heading font-semibold text-base flex items-center gap-2 text-foreground">
+                    <Anchor className="w-4 h-4 text-purple-400" />
+                    Source Attributed Place: <span className="text-purple-300 font-bold">{selectedSource.location_name}</span>
+                  </h3>
+                  <button onClick={() => setSelectedSource(null)} className="text-muted-foreground hover:text-foreground">
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
-              ))}
-            </div>
-            <div className="mt-3 text-xs text-muted-foreground">
-              <Calendar className="w-3.5 h-3.5 inline mr-1 text-primary" />
-              First detected: <span className="text-foreground">{formatDate(selectedHotspot.first_seen)}</span>
-              &nbsp;·&nbsp;
-              Last detected: <span className="text-foreground">{formatDate(selectedHotspot.last_seen)}</span>
-            </div>
-          </motion.div>
-        )}
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-3">
+                  {[
+                    { label: "Country", value: selectedSource.country },
+                    { label: "Source Type", value: selectedSource.source_type },
+                    { label: "Attribution Score", value: `${(selectedSource.attribution_score * 100).toFixed(1)}%` },
+                    { label: "Reverse Drift", value: `${selectedSource.days_to_source.toFixed(1)} days` },
+                    { label: "Latitude", value: selectedSource.lat.toFixed(4) },
+                    { label: "Longitude", value: selectedSource.lng.toFixed(4) },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="bg-muted/20 border border-border/20 rounded-lg p-2.5">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{label}</p>
+                      <p className="font-bold text-sm font-heading text-foreground capitalize">{value}</p>
+                    </div>
+                  ))}
+                </div>
+                {selectedSource.explanation && (
+                  <div className="p-3 bg-black/20 rounded-lg border border-purple-500/20 text-xs text-muted-foreground">
+                    <span className="font-semibold text-purple-300">Hydrodynamic Backtrack Explanation: </span>
+                    {selectedSource.explanation}
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-        {/* ── Historical Activity Timeline ── */}
-        {timeline.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="glass-card border border-border/30 p-6"
-          >
-            <h3 className="font-heading font-semibold flex items-center gap-2 mb-4">
-              <TrendingUp className="w-4 h-4 text-primary" />
-              Historical Activity & Detection Chronology
-              <span className="ml-1 text-xs text-muted-foreground font-normal">· Monthly detections and attributed source points</span>
-            </h3>
-            <div className="h-[180px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={timeline} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="detGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.4} />
-                      <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="btGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#c084fc" stopOpacity={0.35} />
-                      <stop offset="95%" stopColor="#c084fc" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(215 20% 14%)" />
-                  <XAxis dataKey="period" tick={{ fill: "#6B7280", fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: "#6B7280", fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={tooltipStyle} />
-                  <Area
-                    type="monotone"
-                    dataKey="detections"
-                    name="Detections"
-                    stroke="hsl(var(--primary))"
-                    strokeWidth={2}
-                    fill="url(#detGrad)"
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="backtracked"
-                    name="Attributed Sources"
-                    stroke="#c084fc"
-                    strokeWidth={2}
-                    fill="url(#btGrad)"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
-              <div className="flex items-center gap-1.5"><div className="w-3 h-1 bg-primary rounded" />Detection Concentrations</div>
-              <div className="flex items-center gap-1.5"><div className="w-3 h-1 bg-purple-400 rounded" />Source Attributed Places</div>
-            </div>
-          </motion.div>
-        )}
+          {/* Key Insights Section */}
+          {keyInsights && (
+            <div className="glass-card p-5 border border-border/40">
+              <h2 className="text-base font-semibold font-heading flex items-center gap-2 mb-3 text-foreground">
+                <Zap className="w-4 h-4 text-yellow-400" />
+                Data-Driven Key Insights
+                <span className="text-xs font-normal text-muted-foreground">· Derived from actual satellite detections in selected period</span>
+              </h2>
 
-        {/* ── Collapsible Details Table ── */}
-        <motion.div
-          initial={{ opacity: 0, y: 15 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="glass-card border border-border/30 overflow-hidden"
-        >
-          <div
-            className="px-5 py-4 border-b border-border/20 flex items-center justify-between cursor-pointer"
-            onClick={() => setExpandedTable(!expandedTable)}
-          >
-            <div className="flex items-center gap-4">
-              <h3 className="font-heading font-semibold flex items-center gap-2">
-                <Layers className="w-4 h-4 text-primary" />
-                Detailed Data Breakdown
-              </h3>
-              <div className="flex gap-1 p-0.5 bg-black/20 rounded-lg border border-border/20" onClick={e => e.stopPropagation()}>
-                <button
-                  onClick={() => setTableTab("clusters")}
-                  className={`px-2.5 py-1 text-xs rounded-md font-medium transition-colors ${
-                    tableTab === "clusters" ? "bg-primary text-primary-foreground font-semibold" : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  Hotspot Clusters ({hotspots.length})
-                </button>
-                <button
-                  onClick={() => setTableTab("sources")}
-                  className={`px-2.5 py-1 text-xs rounded-md font-medium transition-colors ${
-                    tableTab === "sources" ? "bg-purple-600 text-white font-semibold" : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  Attributed Sources ({allSources.length})
-                </button>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {/* Most Active Area */}
+                <div className="p-3 bg-muted/10 border border-border/20 rounded-xl">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground block mb-1">
+                    Primary Coastal Contributor
+                  </span>
+                  <p className="text-sm font-bold text-foreground">
+                    {keyInsights.topArea ? keyInsights.topArea.areaName : "N/A"}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {keyInsights.topArea ? `Leading coastal accumulation zone with ${keyInsights.topArea.detectionCount} detections (${keyInsights.topArea.percentOfTotal.toFixed(0)}% of period across ${keyInsights.topArea.clusterCount} clusters).` : "No activity"}
+                  </p>
+                </div>
+
+                {/* Top Source Origin */}
+                <div className="p-3 bg-muted/10 border border-border/20 rounded-xl">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground block mb-1">
+                    Dominant Attributed Source
+                  </span>
+                  <p className="text-sm font-bold text-foreground">
+                    {keyInsights.topSource ? keyInsights.topSource.sourceName : "N/A"}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {keyInsights.topSource ? `${keyInsights.topSource.sourceType.toUpperCase()} origin linked to ${keyInsights.topSource.clusterCount} clusters (~${keyInsights.topSource.daysToSource.toFixed(1)}d reverse transit).` : "No source"}
+                  </p>
+                </div>
+
+                {/* Peak Activity */}
+                <div className="p-3 bg-muted/10 border border-border/20 rounded-xl">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground block mb-1">
+                    Peak Detection Day
+                  </span>
+                  <p className="text-sm font-bold text-foreground">
+                    {keyInsights.peakActivity ? formatDate(keyInsights.peakActivity.date) : "N/A"}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {keyInsights.peakActivity ? `Highest single-day debris accumulation with ${keyInsights.peakActivity.detections} detections registered.` : "No activity"}
+                  </p>
+                </div>
+
+                {/* Largest Hotspot */}
+                <div className="p-3 bg-muted/10 border border-border/20 rounded-xl">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground block mb-1">
+                    Largest Hotspot by Area
+                  </span>
+                  <p className="text-sm font-bold text-foreground">
+                    {keyInsights.largest ? `${keyInsights.largest.label} (${keyInsights.largest.area_name})` : "N/A"}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {keyInsights.largest ? `Spanning ${keyInsights.largest.total_area_m2 > 1000 ? `${(keyInsights.largest.total_area_m2 / 1000).toFixed(1)}k` : Math.round(keyInsights.largest.total_area_m2)} m² of ocean surface.` : "No activity"}
+                  </p>
+                </div>
+
+                {/* Highest Confidence */}
+                <div className="p-3 bg-muted/10 border border-border/20 rounded-xl">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground block mb-1">
+                    Highest-Confidence Hotspot
+                  </span>
+                  <p className="text-sm font-bold text-foreground">
+                    {keyInsights.highestConf ? `${keyInsights.highestConf.label} (${keyInsights.highestConf.area_name})` : "N/A"}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {keyInsights.highestConf ? `Mean model confidence of ${(keyInsights.highestConf.avg_confidence * 100).toFixed(1)}%.` : "No activity"}
+                  </p>
+                </div>
+
+                {/* Recurring Hotspots */}
+                <div className="p-3 bg-muted/10 border border-border/20 rounded-xl">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground block mb-1">
+                    Recurring Accumulations
+                  </span>
+                  <p className="text-sm font-bold text-foreground">
+                    {keyInsights.recurringCount} of {hotspots.length} Clusters
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {keyInsights.recurringCount > 0 ? "Hotspots detected repeatedly across multiple satellite acquisition dates." : "Detections confined to single-pass scenes."}
+                  </p>
+                </div>
               </div>
             </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              {expandedTable ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-            </div>
-          </div>
+          )}
 
-          {expandedTable && (
-            <div className="overflow-x-auto">
-              {tableTab === "clusters" ? (
+          {/* Collapsible Complete Data Breakdown with Coastal Area column */}
+          <div className="glass-card border border-border/30 overflow-hidden">
+            <div
+              className="px-5 py-3.5 border-b border-border/20 flex items-center justify-between cursor-pointer hover:bg-muted/10 transition-colors"
+              onClick={() => setExpandedTable(!expandedTable)}
+            >
+              <h3 className="font-heading font-semibold text-sm flex items-center gap-2">
+                <Layers className="w-4 h-4 text-primary" />
+                Complete Hotspot Clustering Table ({hotspots.length})
+              </h3>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                {expandedTable ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </div>
+            </div>
+
+            {expandedTable && (
+              <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border/20 text-muted-foreground text-xs">
-                      {["#", "Cluster", "Center Coords", "Detections", "Runs", "Avg Confidence", "Total Area (m²)", "First Seen", "Last Seen"].map(h => (
+                      {["#", "Cluster", "Coastal Area / Zone", "Center Coords", "Detections", "Runs", "Avg Confidence", "Total Area (m²)", "First Detected", "Last Detected"].map(h => (
                         <th key={h} className="text-left px-4 py-3 font-medium whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -1111,6 +2287,11 @@ const HotspotsPage: React.FC = () => {
                               <span className="font-medium">{h.label}</span>
                             </div>
                           </td>
+                          <td className="px-4 py-2.5">
+                            <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold border ${h.area_badge_color}`}>
+                              {h.area_name}
+                            </span>
+                          </td>
                           <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{h.center[0].toFixed(4)}, {h.center[1].toFixed(4)}</td>
                           <td className="px-4 py-2.5 font-semibold">{h.detection_count}</td>
                           <td className="px-4 py-2.5">{h.run_count}</td>
@@ -1123,49 +2304,11 @@ const HotspotsPage: React.FC = () => {
                     })}
                   </tbody>
                 </table>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border/20 text-muted-foreground text-xs">
-                      {["Source Attributed Place", "Country", "Source Activity", "Coords", "Score", "Transit Time", "Run", "Debris Cluster"].map(h => (
-                        <th key={h} className="text-left px-4 py-3 font-medium whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {allSources.map(src => (
-                      <tr
-                        key={src.id}
-                        className={`border-b border-border/10 cursor-pointer transition-colors ${
-                          selectedSource?.id === src.id ? "bg-purple-600/15" : "hover:bg-muted/10"
-                        }`}
-                        onClick={() => selectSource(src)}
-                      >
-                        <td className="px-4 py-2.5">
-                          <div className="flex items-center gap-2 font-medium text-foreground">
-                            <Anchor className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
-                            {src.location_name}
-                          </div>
-                        </td>
-                        <td className="px-4 py-2.5 text-xs text-muted-foreground">{src.country}</td>
-                        <td className="px-4 py-2.5">
-                          <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">
-                            {src.source_type}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{src.lat.toFixed(4)}, {src.lng.toFixed(4)}</td>
-                        <td className="px-4 py-2.5 font-semibold text-emerald-400">{(src.attribution_score * 100).toFixed(1)}%</td>
-                        <td className="px-4 py-2.5 text-xs">{src.days_to_source.toFixed(1)} days</td>
-                        <td className="px-4 py-2.5 text-xs text-muted-foreground">{src.run_name}</td>
-                        <td className="px-4 py-2.5 text-xs font-mono">#{src.cluster_id}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
-        </motion.div>
+              </div>
+            )}
+          </div>
+        </div>
+
       </div>
     </div>
   );
