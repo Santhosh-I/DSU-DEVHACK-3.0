@@ -1,169 +1,335 @@
-# 🌊 Plastic-Ledger
+# Plastic-Ledger
 
-**Autonomous Micro-Plastic Fingerprinting & Source Attribution from Satellite Imagery**
+## Project Overview
 
-Plastic-Ledger is an end-to-end Python pipeline that detects marine plastic debris in Sentinel-2
-satellite imagery, classifies the polymer type, traces debris back to its source using ocean
-current simulations, and generates comprehensive attribution reports. It uses a SegFormer deep
-learning model trained on the [MARIDA](https://github.com/marine-debris/marine-debris.github.io)
-dataset for segmentation, combined with XGBoost spectral analysis, Lagrangian particle tracking, and
-multi-source geospatial attribution.
+Plastic-Ledger is a satellite-imagery platform for detecting marine debris, identifying likely
+polymer classes, tracing debris toward possible source regions, and reviewing the results in a
+web dashboard.
 
----
+The project addresses a practical environmental monitoring problem: plastic debris is difficult to
+locate across large coastal areas, and a detection alone does not explain where the debris may have
+come from. Plastic-Ledger combines image segmentation, spectral classification, ocean and wind
+data, particle backtracking, and source attribution so that analysts can move from a satellite
+scene to an evidence-based investigation.
 
-## 🔬 Pipeline Architecture
+## What The System Does
 
+The complete workflow is implemented as seven pipeline stages:
+
+1. **Ingest**: Find and download Sentinel-2 imagery for a selected bounding box and date.
+2. **Preprocess**: Prepare satellite bands and image patches for inference.
+3. **Detect**: Use the SegFormer model to segment marine debris and other scene classes.
+4. **Polymer classification**: Use spectral features and an XGBoost model to classify detections.
+5. **Backtracking**: Simulate particle movement using CMEMS currents, ERA5 wind, RK4 integration,
+   diffusion, and clustering.
+6. **Attribution**: Score possible fishing, industrial, shipping, and river sources using geographic
+   and environmental evidence.
+7. **Reporting**: Generate JSON, CSV, GeoJSON, map, and report outputs for each run.
+
+## Pipeline Architecture
+
+```text
++---------------------------------------------------------------------+
+|                      PLASTIC-LEDGER PIPELINE                       |
++---------------------------------------------------------------------+
+|                                                                     |
+|  +----------+    +----------+    +----------+    +----------+       |
+|  | Stage 1  |--->| Stage 2  |--->| Stage 3  |--->| Stage 4  |       |
+|  | Ingest   |    |Preprocess|    | Detect   |    | Polymer  |       |
+|  |          |    |          |    | SegFormer|    | XGBoost  |       |
+|  | Sentinel |    | Band     |    | + TTA    |    | ML Model |       |
+|  | 2 STAC   |    | Reorder  |    | Cluster  |    |          |       |
+|  | Download |    | and Tile |    |          |    |          |       |
+|  +----------+    +----------+    +----------+    +-----+----+       |
+|                                                       |             |
+|                                                       v             |
+|  +----------+    +----------+    +----------+    +----------+       |
+|  | Stage 7  |<---| Stage 6  |<---| Stage 5  |<---| Debris   |       |
+|  | Report   |    |Attribute |    |Backtrack |    | Clusters |       |
+|  |          |    | Fishing  |    | CMEMS +  |    | + Polymer|       |
+|  | PDF      |    | Industry |    | ERA5     |    | Type     |       |
+|  | GeoJSON  |    | Shipping |    | RK4      |    +----------+       |
+|  | CSV      |    | Rivers   |    | Diffusion|                     |
+|  +----------+    +----------+    +----------+                     |
+|                                                                     |
++---------------------------------------------------------------------+
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                      PLASTIC-LEDGER PIPELINE                        │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐      │
-│  │ Stage 1  │───▶│ Stage 2  │───▶│ Stage 3  │───▶│ Stage 4  │      │
-│  │ Ingest   │    │Preprocess│    │ Detect   │    │ Polymer  │      │
-│  │          │    │          │    │          │    │ Classify │      │
-│  │ Sentinel │    │ Band     │    │ SegFormer│    │ XGBoost  │      │
-│  │ 2 STAC   │    │ Reorder  │    │ + TTA    │    │ ML Model │      │
-│  │ Download │    │ Offset   │    │ Cluster  │    │          │      │
-│  └──────────┘    │ Tile     │    └──────────┘    └─────┬────┘      │
-│                  └──────────┘                          │            │
-│                                                        ▼            │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐      │
-│  │ Stage 7  │◀───│ Stage 6  │◀───│ Stage 5  │◀───│          │      │
-│  │ Report   │    │Attribute │    │Backtrack │    │ Debris   │      │
-│  │          │    │          │    │          │    │ Clusters │      │
-│  │ PDF      │    │ Fishing  │    │ CMEMS +  │    │ + Polymer│      │
-│  │ GeoJSON  │    │ Industry │    │ ERA5     │    │ Type     │      │
-│  │ CSV      │    │ Shipping │    │ RK4      │    └──────────┘      │
-│  │ Terminal │    │ Rivers   │    │ DBSCAN   │                      │
-│  └──────────┘    └──────────┘    └──────────┘                      │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+
+The dashboard reads run data through the Django API and also presents the bundled evaluation
+artifacts under `frontend/public/asserts/`. The Model Outputs page displays SegFormer evaluation
+metrics, Polymer XGBoost metrics, and visual output images.
+
+## Main Features
+
+- Create pipeline runs by drawing or entering a geographic bounding box.
+- Configure target date, cloud-cover limit, backtracking duration, cluster limit, and run name.
+- Track pipeline status from pending through completed or failed.
+- Review aggregate KPIs and all available runs on the dashboard.
+- Explore detections on interactive Leaflet maps.
+- View polymer classifications, confidence, false-positive information, and debris clusters.
+- Animate hydrodynamic backtrack paths with selectable tile layers and speeds from `0.5x` to `4x`.
+- Inspect source attribution for fishing, industrial, shipping, and river categories.
+- Explore hotspot and contributor views across available runs.
+- Review reports and download or inspect GeoJSON, CSV, JSON, and map outputs.
+- Compare SegFormer and Polymer XGBoost evaluation metrics in the Model Outputs page.
+
+## Technology Stack
+
+### Machine Learning And Data Processing
+
+- Python 3
+- PyTorch, torchvision, and segmentation-models-pytorch
+- SegFormer for semantic segmentation
+- XGBoost with spectral indices for polymer classification
+- NumPy, pandas, SciPy, scikit-learn, h5py, and joblib
+- rasterio, GeoPandas, Shapely, pyproj, xarray, and netCDF4
+- Sentinel-2 access through Copernicus Data Space and STAC tooling
+- CMEMS ocean currents and CDS/ERA5 environmental data
+- Matplotlib, Rich, and fpdf2 for visualization and reporting
+
+### Backend
+
+- Django 5
+- Django REST Framework
+- django-cors-headers
+- MySQL through PyMySQL
+- REST endpoints for pipeline runs, run status, and cluster backtracking
+
+### Frontend
+
+- React 19 with TypeScript and JSX
+- Vite 8
+- React Router
+- Tailwind CSS
+- Leaflet and React Leaflet for maps
+- Recharts for charts
+- Framer Motion for interface animation
+- Lucide React for icons
+
+## Project Structure
+
+```text
+DSU-DEVHACK-3.0/
+|-- README.md                         Project documentation
+|-- requirements.txt                  Shared Python dependency specification
+|-- template.env                      Environment-variable template
+|-- .env.example                      Example environment configuration
+|
+|-- frontend/                         React/Vite dashboard
+|   |-- package.json                   Frontend scripts and dependencies
+|   |-- vite.config.ts                 Vite server and /api, /data proxies
+|   |-- src/
+|   |   |-- App.tsx                    Router and application shell
+|   |   |-- components/                Navbar, error boundary, maps, and tabs
+|   |   |-- pages/                     Landing, dashboard, tracking, runs, hotspots, model
+|   |   |-- services/                  Run and artifact data loading
+|   |   |-- lib/                       API clients and shared utilities
+|   |   |-- types/                     Shared frontend data contracts
+|   |   `-- index.css                  Tailwind layers and application theme
+|   `-- public/
+|       |-- data/runs/                 Bundled run artifacts used by the dashboard
+|       `-- asserts/                   Evaluation JSON and model visual outputs
+|
+|-- server/                            Django REST backend
+|   |-- manage.py                      Django command entry point
+|   |-- requirements.txt               Backend environment lock/specification
+|   |-- server/                        Django settings, URLs, and WSGI/ASGI files
+|   `-- api/                           Run models, serializers, views, URLs, tests
+|
+|-- src/                               Python pipeline source
+|   |-- config/                        Pipeline configuration
+|   |-- pipeline/
+|   |   |-- run_pipeline.py            Seven-stage orchestration and CLI
+|   |   |-- 01_ingest.py               Sentinel-2 ingestion
+|   |   |-- 02_preprocess.py            Band and patch preparation
+|   |   |-- 03_detect.py                SegFormer detection
+|   |   |-- 04_polymer.py               Polymer classification
+|   |   |-- 05_backtrack.py             Particle backtracking
+|   |   |-- 06_attribute.py             Source attribution
+|   |   |-- 07_report.py                Report generation
+|   |   `-- utils/                      Caching, configuration, and logging helpers
+|   `-- tests/                          Pipeline tests
+|
+|-- ml_training/                        Training and evaluation scripts
+|   |-- polymer/                        XGBoost training/evaluation workflow
+|   |-- segformer/                      SegFormer training/evaluation workflow
+|   `-- tools/                          Training utilities
+|
+|-- models/                             Trained model artifacts and feature metadata
+|   |-- polymer/                        XGBoost models, labels, and feature names
+|   `-- production/                     Production SegFormer and other deployed artifacts
 ```
 
----
+## Setup
 
-## 🚀 Quick Start
+### 1. Python Environment
+
+From the repository root:
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/your-org/Plastic-Ledger.git
-cd Plastic-Ledger
+python -m venv .venv
 
-# 2. Install dependencies
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# macOS/Linux
+# source .venv/bin/activate
+
 pip install -r requirements.txt
-
-# 3. Set up API credentials
-cp .env.example .env
-# Edit .env with your API keys (see "API Keys" section below)
-
-# 4. Run the pipeline on a test area (Sri Lanka coast)
-python pipeline/run_pipeline.py \
-    --bbox "80.5,7.5,81.5,8.5" \
-    --start_date "2024-01-10" \
-    --end_date "2024-01-15" \
-    --output_dir "data/runs/test_run" \
-    --model_path "ml_training_2.0/SegFormer/training-log/run_1/best_model.pth" \
-    --cloud_cover 20 \
-    --backtrack_days 7
-
-# 5. Check output
-ls data/runs/test_run/reports/
 ```
 
----
-
-## 🔑 API Keys Setup
-
-The pipeline requires credentials for external data sources. All keys are stored in `.env`:
-
-| Service | Purpose | Sign Up |
-|---------|---------|---------|
-| **Copernicus Data Space** | Sentinel-2 satellite imagery download | [dataspace.copernicus.eu](https://dataspace.copernicus.eu) (free) |
-| **CMEMS** | Ocean current data (surface velocity) | [marine.copernicus.eu](https://marine.copernicus.eu) (free) |
-| **CDS API** | ERA5 wind data for drift calculation | [cds.climate.copernicus.eu](https://cds.climate.copernicus.eu) (free) |
-| **Global Fishing Watch** | Fishing vessel positions | [globalfishingwatch.org](https://globalfishingwatch.org/data/) (free academic) |
+The backend also provides a pinned environment specification:
 
 ```bash
-# .env file format:
-COPERNICUS_USERNAME=your_email@example.com
-COPERNICUS_PASSWORD=your_password
-GFW_TOKEN=your_global_fishing_watch_token
-CDS_API_KEY=your_climate_data_store_key
-# Optional: cap ERA5/CDS retry behavior (Stage 5)
-CDS_RETRY_MAX=3
-CDS_SLEEP_MAX=10
-CDS_TIMEOUT=60
+pip install -r server/requirements.txt
 ```
 
-> **Note**: The pipeline runs in graceful degradation mode — if API keys are missing, it will
-> use heuristic fallbacks for scoring (Stages 5 and 6) and skip data downloads.
+### 2. Environment Variables
 
----
-
-## 📋 Example CLI Command
+Copy `template.env` to `.env` and fill in the values required for the services you plan to use:
 
 ```bash
-# Full pipeline — Sri Lanka coast, January 2024
-python pipeline/run_pipeline.py \
+copy template.env .env                 # Windows
+# cp template.env .env                 # macOS/Linux
+```
+
+Important variables include:
+
+| Variable | Used for |
+|----------|----------|
+| `DJANGO_SECRET_KEY` | Django security configuration |
+| `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` | MySQL connection |
+| `COPERNICUS_USERNAME`, `COPERNICUS_PASSWORD` | Sentinel-2 data access |
+| `GFW_TOKEN` | Global Fishing Watch source evidence |
+| `CDS_API_KEY` | ERA5 wind data |
+
+Do not commit `.env` or real credentials.
+
+### 3. Start The Backend
+
+From the repository root:
+
+```bash
+python server/manage.py migrate
+python server/manage.py runserver 8000
+```
+
+The frontend Vite configuration proxies `/api` and `/data` requests to `http://localhost:8000`.
+
+### 4. Start The Frontend
+
+In a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`.
+
+Useful frontend commands:
+
+```bash
+npm run build
+npm run lint
+npm run preview
+```
+
+## Running The Pipeline
+
+The current CLI is `src/pipeline/run_pipeline.py` and uses `--date` for the target date:
+
+```bash
+python src/pipeline/run_pipeline.py \
     --bbox "80.0,6.0,82.0,8.0" \
-    --start_date "2024-01-01" \
-    --end_date "2024-01-31" \
+    --date "2024-01-31" \
     --output_dir "data/runs/sri_lanka_jan24" \
-    --model_path "ml_training_2.0/SegFormer/training-log/run_1/best_model.pth" \
+    --model_path "models/production/best_model_SegFormer_v2.pth" \
     --cloud_cover 20 \
     --backtrack_days 30
-
-# Skip stages 1 and 2 (if data is already downloaded & preprocessed)
-python pipeline/run_pipeline.py \
-    --bbox "80.0,6.0,82.0,8.0" \
-    --start_date "2024-01-01" \
-    --end_date "2024-01-31" \
-    --output_dir "data/runs/sri_lanka_jan24" \
-    --skip_stages "1,2"
 ```
 
-Each stage can also be run independently:
+Optional controls include:
+
+```text
+--skip_stages 1,2       Reuse existing ingestion or preprocessing outputs
+--max_clusters 10       Limit the number of clusters to backtrack
+--cleanup_patches       Remove cached patches after polymer classification
+--config path/to/file   Use a custom YAML configuration
+--no-bbox-filter        Process the full scene instead of the selected bbox
+```
+
+The pipeline expects the bounding box in this order:
+`lon_min,lat_min,lon_max,lat_max`.
+
+## Dashboard Routes
+
+| Route | Purpose |
+|-------|---------|
+| `/` | Landing page and product entry point |
+| `/dashboard` | Pipeline runs and aggregate KPIs |
+| `/tracking` | Create a run and select an area on a map |
+| `/runs/:id` | Detailed run tabs for overview, detection, attribution, analytics, and reports |
+| `/hotspots` | Cross-run hotspot and source-contributor analysis |
+| `/model` | SegFormer and Polymer evaluation metrics plus visual outputs |
+
+## Run Outputs
+
+Each pipeline run stores artifacts under a run directory, commonly `data/runs/<run_id>/`:
+
+| Output | Purpose |
+|--------|---------|
+| `run_summary.json` | Target date, stages, model path, outputs, and timing |
+| `ingest_metadata.json` | Bounding box, date range, cloud-cover limit, and scenes |
+| `detections/` | Raw and classified detection GeoJSON files |
+| `attribution/` | Backtrack trajectories, source scores, and metadata |
+| `reports/` | Final GeoJSON, debris CSV, maps, and generated reports |
+| `backtrack_*.geojson` | Per-cluster particle trajectories |
+| `attribution_report.json` | Ranked source attribution results |
+| `debris_summary.csv` | Flat cluster-level detection summary |
+
+The repository includes a sample run under `frontend/public/data/runs/run_001/` for dashboard
+development and demonstration.
+
+## Model Evaluation Assets
+
+The Model Outputs page reads these checked-in files:
+
+- `frontend/public/asserts/segformer_eval_results/evaluation_results.json`
+- `frontend/public/asserts/segformer_eval_results/evaluation_report.md`
+- `frontend/public/asserts/polymer/polymer_xgb_model_eval.json`
+- `frontend/public/asserts/vis_output/*.png`
+
+The SegFormer data contains overall mIoU, marine-debris precision/recall/F1, and per-class IoU.
+The Polymer data contains accuracy, macro and weighted averages, and per-class precision, recall,
+F1 score, and support.
+
+## Testing
+
+Backend and pipeline tests are located in `server/api/tests.py` and `src/tests/`. Run the available
+Python tests from the repository root with:
 
 ```bash
-# Run just Stage 3 (detection) on pre-existing patches
-python -m pipeline.03_detect \
-    --scene_id S2A_MSIL2A_20240115 \
-    --patches_dir data/processed/S2A_MSIL2A_20240115/patches \
-    --model_path ml_training_2.0/SegFormer/training-log/run_1/best_model.pth
+python -m pytest server/api src/tests -v
 ```
 
----
-
-## 📁 Output Files
-
-| File | Description |
-|------|-------------|
-| `final_report.pdf` | Executive summary with detection maps, polymer charts, and attribution tables |
-| `final_report.geojson` | All detections with attribution data as GeoJSON (for GIS tools) |
-| `debris_summary.csv` | Flat CSV with one row per debris cluster |
-| `debris_mask.tif` | Binary GeoTIFF mask of detected debris pixels |
-| `debris_prob.tif` | Float32 GeoTIFF probability map of debris class |
-| `class_mask.tif` | Full 15-class prediction mask (uint8 GeoTIFF) |
-| `detections.geojson` | Raw debris detection polygons with area and confidence |
-| `detections_classified.geojson` | Detections with polymer type classification |
-| `backtrack_*.geojson` | Particle trajectories per debris cluster |
-| `attribution_report.json` | Source attribution scores and explanations |
-| `run_summary.json` | Pipeline run metadata and timing |
-
----
-
-## 🧪 Running Tests
+For frontend validation:
 
 ```bash
-python -m pytest tests/ -v
+cd frontend
+npm run build
+npm run lint
 ```
 
-Tests use mocked data and do not require API keys, GPU, or downloaded imagery.
+## Data And Credentials
 
----
+Sentinel-2, CMEMS, ERA5/CDS, and Global Fishing Watch data are supplied by external services and
+have their own access terms. Keep credentials out of source control and verify the applicable
+licenses before redistributing imagery, trained weights, or derived datasets.
 
-## 📄 License
+## License And Intended Use
 
-This project is for research and educational purposes. The MARIDA dataset and Sentinel-2
-imagery are subject to their respective licenses (Copernicus Data Space EULA).
+Plastic-Ledger is intended for research, environmental analysis, and demonstration. Detection and
+source-attribution outputs should be treated as decision support rather than definitive proof of
+responsibility or origin.
