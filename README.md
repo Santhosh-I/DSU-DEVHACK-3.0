@@ -153,38 +153,6 @@ python -m pipeline.03_detect \
 
 ---
 
-## 🏗️ Project Structure
-
-```
-Plastic-Ledger/
-├── models/
-│   ├── polymer/
-│   │   └── polymer_xgb_model.json      ← Trained XGBoost model
-│   └── runs/marida_v1/
-│       └── best_model.pth              ← Legacy U-Net checkpoint
-├── pipeline/
-│   ├── 01_ingest.py                    ← Sentinel-2 STAC search & download
-│   ├── 02_preprocess.py                ← Band reorder, offset correct, tile
-│   ├── 03_detect.py                    ← SegFormer inference + TTA + clustering
-│   ├── 04_polymer.py                   ← XGBoost polymer classification
-│   ├── 05_backtrack.py                 ← Lagrangian RK4 particle tracking
-│   ├── 06_attribute.py                 ← Multi-source attribution scoring
-│   ├── 07_report.py                    ← PDF + GeoJSON + CSV + terminal output
-│   ├── run_pipeline.py                 ← Master pipeline orchestrator
-│   └── utils/
-│       ├── logging_utils.py            ← Rich-based logger
-│       ├── geo_utils.py                ← GeoTIFF I/O, polygon conversion
-│       └── cache_utils.py              ← Stage caching, config loader
-├── config/
-│   └── config.yaml                     ← All thresholds and parameters
-├── tests/
-│   ├── test_stage_1.py … test_stage_7.py
-├── data/                               ← Generated outputs (gitignored)
-├── requirements.txt
-├── .env.example
-└── README.md
-```
-
 ## 🧪 Running Tests
 
 ```bash
