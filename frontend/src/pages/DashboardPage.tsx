@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { motion } from "framer-motion";
-import { getPipelineRuns } from "@/lib/api";
+import { motion, AnimatePresence } from "framer-motion";
+import { getPipelineRuns, deletePipelineRun } from "@/lib/api";
 import { RunSummary, PipelineRun } from "@/types";
 import {
   Crosshair,
@@ -19,6 +19,9 @@ import {
   ClipboardList,
   LayoutDashboard,
   Flame,
+  Trash2,
+  AlertTriangle,
+  Loader2,
 } from "lucide-react";
 
 function KpiCard({ label, value, icon: Icon, color }: { label: string; value: string; icon: any; color: string }) {
@@ -54,6 +57,25 @@ function ActionButton({ to, icon: Icon, label, color }: { to: string; icon: any;
 const DashboardPage: React.FC = () => {
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingRun, setDeletingRun] = useState<PipelineRun | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const confirmDelete = async () => {
+    if (!deletingRun) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await deletePipelineRun(deletingRun.id);
+      setRuns((prev) => prev.filter((r) => r.id !== deletingRun.id));
+      setDeletingRun(null);
+    } catch (err: any) {
+      console.error("Failed to delete run:", err);
+      setDeleteError(err.message || "Failed to delete run. Please try again.");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const fetchRuns = async () => {
     try {
@@ -204,41 +226,41 @@ const DashboardPage: React.FC = () => {
                       <td className="px-5 py-3 font-semibold">{isCompleted ? rTotal : "—"}</td>
                       <td className="px-5 py-3 font-semibold text-destructive">{isCompleted ? rPlastic : "—"}</td>
                       <td className="px-5 py-3">
-                        {isCompleted ? (
-                          <div className="flex items-center justify-center gap-1.5">
-                            <ActionButton
-                              to={`/runs/${run.id}`}
-                              icon={ClipboardList}
-                              label="Run Details"
-                              color="text-foreground hover:bg-muted/50"
-                            />
-                            <ActionButton
-                              to={`/runs/${run.id}?tab=detection`}
-                              icon={Map}
-                              label="Detection Map"
-                              color="text-blue-400 hover:bg-blue-500/15"
-                            />
-                            <ActionButton
-                              to={`/runs/${run.id}?tab=attribution`}
-                              icon={GitBranch}
-                              label="Attribution"
-                              color="text-emerald-400 hover:bg-emerald-500/15"
-                            />
-                            <ActionButton
-                              to={`/runs/${run.id}?tab=analytics`}
-                              icon={BarChart3}
-                              label="Analytics"
-                              color="text-purple-400 hover:bg-purple-500/15"
-                            />
-                            <ActionButton
-                              to={`/runs/${run.id}?tab=reports`}
-                              icon={FileText}
-                              label="Reports"
-                              color="text-yellow-400 hover:bg-yellow-500/15"
-                            />
-                          </div>
-                        ) : (
-                          <div className="flex items-center justify-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          {isCompleted ? (
+                            <>
+                              <ActionButton
+                                to={`/runs/${run.id}`}
+                                icon={ClipboardList}
+                                label="Run Details"
+                                color="text-foreground hover:bg-muted/50"
+                              />
+                              <ActionButton
+                                to={`/runs/${run.id}?tab=detection`}
+                                icon={Map}
+                                label="Detection Map"
+                                color="text-blue-400 hover:bg-blue-500/15"
+                              />
+                              <ActionButton
+                                to={`/runs/${run.id}?tab=attribution`}
+                                icon={GitBranch}
+                                label="Attribution"
+                                color="text-emerald-400 hover:bg-emerald-500/15"
+                              />
+                              <ActionButton
+                                to={`/runs/${run.id}?tab=analytics`}
+                                icon={BarChart3}
+                                label="Analytics"
+                                color="text-purple-400 hover:bg-purple-500/15"
+                              />
+                              <ActionButton
+                                to={`/runs/${run.id}?tab=reports`}
+                                icon={FileText}
+                                label="Reports"
+                                color="text-yellow-400 hover:bg-yellow-500/15"
+                              />
+                            </>
+                          ) : (
                             <Link
                               to={`/runs/${run.id}`}
                               className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-all"
@@ -246,8 +268,19 @@ const DashboardPage: React.FC = () => {
                             >
                               <ClipboardList className="w-4 h-4" />
                             </Link>
-                          </div>
-                        )}
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDeletingRun(run);
+                              setDeleteError(null);
+                            }}
+                            className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/15 transition-all"
+                            title="Delete Run"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -267,6 +300,80 @@ const DashboardPage: React.FC = () => {
           </div>
         </motion.div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {deletingRun && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="glass-card max-w-md w-full p-6 border border-destructive/30 shadow-2xl rounded-2xl bg-card/95"
+            >
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 rounded-full bg-destructive/15 text-destructive flex items-center justify-center flex-shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-lg font-heading font-bold text-foreground">
+                    Delete Pipeline Run
+                  </h3>
+                  <p className="text-sm text-muted-foreground mt-1.5">
+                    Are you sure you want to permanently delete run{" "}
+                    <span className="font-semibold text-foreground font-mono text-xs px-1.5 py-0.5 bg-muted/60 rounded">
+                      {deletingRun.run_name || deletingRun.id.substring(0, 8)}
+                    </span>
+                    ?
+                  </p>
+                  <p className="text-xs text-muted-foreground/80 mt-1">
+                    This will remove all associated satellite detections, backtracking trajectories, reports, and data. This action cannot be undone.
+                  </p>
+
+                  {deleteError && (
+                    <div className="mt-3 p-2.5 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                      <span>{deleteError}</span>
+                    </div>
+                  )}
+
+                  <div className="mt-5 flex items-center justify-end gap-2.5">
+                    <button
+                      type="button"
+                      disabled={isDeleting}
+                      onClick={() => {
+                        setDeletingRun(null);
+                        setDeleteError(null);
+                      }}
+                      className="px-3.5 py-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted/70 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isDeleting}
+                      onClick={confirmDelete}
+                      className="px-4 py-1.5 text-xs font-semibold text-white bg-destructive hover:bg-destructive/90 rounded-lg transition-all flex items-center gap-1.5 shadow-md shadow-destructive/20 disabled:opacity-50"
+                    >
+                      {isDeleting ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          Deleting…
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Delete Run
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

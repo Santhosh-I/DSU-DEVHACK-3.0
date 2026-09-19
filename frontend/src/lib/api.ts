@@ -47,3 +47,13 @@ export async function backtrackCluster(runId: string, clusterId: number): Promis
   }
   return res.json();
 }
+
+export async function deletePipelineRun(id: string): Promise<void> {
+  const res = await fetch(`/api/pipeline/runs/${id}/`, {
+    method: "DELETE",
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(`Failed to delete run: ${res.statusText}`);
+  }
+}
+

@@ -72,9 +72,16 @@ class PipelineRunListCreateView(generics.ListCreateAPIView):
         thread.daemon = True
         thread.start()
 
-class PipelineRunDetailView(generics.RetrieveAPIView):
+class PipelineRunDetailView(generics.RetrieveDestroyAPIView):
     queryset = PipelineRun.objects.all()
     serializer_class = PipelineRunSerializer
+
+    def perform_destroy(self, instance):
+        output_dir = PROJECT_ROOT / 'data' / 'runs' / str(instance.id)
+        if output_dir.exists():
+            import shutil
+            shutil.rmtree(output_dir, ignore_errors=True)
+        instance.delete()
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
