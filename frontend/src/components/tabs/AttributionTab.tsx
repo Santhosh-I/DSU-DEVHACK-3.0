@@ -47,6 +47,14 @@ const shipIcon = L.divIcon({
   popupAnchor: [0, -13],
 });
 
+const secondaryShipIcon = L.divIcon({
+  className: "custom-secondary-ship-marker",
+  html: `<div style="background-color: #0d9488; color: white; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 0 6px rgba(13,148,136,0.8); font-size: 11px; line-height: 18px; text-align: center;">🚢</div>`,
+  iconSize: [22, 22],
+  iconAnchor: [11, 11],
+  popupAnchor: [0, -11],
+});
+
 const SCORE_COLORS = {
   fishing: "#3B82F6",
   industrial: "#F59E0B",
@@ -480,72 +488,87 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
               })}
 
             {showNearbyShips &&
-              (attribution || []).map((a) => {
-                if (selectedCluster !== null && selectedCluster !== a.debris_cluster_id) return null;
-                const ship = a.nearest_ship;
-                if (!ship || !Number.isFinite(ship.lat) || !Number.isFinite(ship.lon)) return null;
+              (attribution || []).flatMap((a) => {
+                if (selectedCluster !== null && selectedCluster !== a.debris_cluster_id) return [];
+                const vessels = (a.nearby_vessels && a.nearby_vessels.length > 0)
+                  ? a.nearby_vessels
+                  : (a.nearest_ship ? [a.nearest_ship] : []);
                 const cCoord = clusterCoords[a.debris_cluster_id];
-                return (
-                  <React.Fragment key={`ship-group-${a.debris_cluster_id}`}>
-                    {cCoord && Number.isFinite(cCoord[0]) && Number.isFinite(cCoord[1]) && (
-                      <Polyline
-                        positions={[cCoord, [ship.lat, ship.lon]]}
-                        pathOptions={{
-                          color: "#38bdf8",
-                          weight: 1.5,
-                          dashArray: "4 4",
-                          opacity: 0.8,
-                        }}
-                      />
-                    )}
-                    <Marker position={[ship.lat, ship.lon]} icon={shipIcon}>
-                      <Popup>
-                        <div className="text-xs p-1 space-y-1.5 min-w-[200px]">
-                          <div className="flex items-center gap-1.5 font-bold text-sm text-foreground">
-                            <span>🚢</span>
-                            <span className="truncate">{ship.ship_name || ship.shipname || "Vessel " + (ship.mmsi || "")}</span>
-                            <span>{getFlagEmoji(ship.flag)}</span>
-                          </div>
-                          <div className="text-muted-foreground text-[11px]">
-                            Nearest to Debris Cluster <span className="font-semibold text-primary">#{a.debris_cluster_id}</span>
-                          </div>
-                          <div className="border-t border-border/40 pt-1 space-y-0.5 text-[11px]">
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">Distance:</span>
-                              <span className="text-sky-400 font-semibold">{ship.distance_km != null ? `${ship.distance_km.toFixed(2)} km` : "Nearby"}</span>
+
+                return vessels.map((ship, vIdx) => {
+                  if (!ship || !Number.isFinite(ship.lat) || !Number.isFinite(ship.lon)) return null;
+                  const isNearest = vIdx === 0 || (a.nearest_ship && (ship.mmsi === a.nearest_ship.mmsi || ship.ship_name === a.nearest_ship.ship_name));
+                  return (
+                    <React.Fragment key={`ship-${a.debris_cluster_id}-${ship.vessel_id || ship.mmsi || vIdx}`}>
+                      {cCoord && Number.isFinite(cCoord[0]) && Number.isFinite(cCoord[1]) && (
+                        <Polyline
+                          positions={[cCoord, [ship.lat, ship.lon]]}
+                          pathOptions={{
+                            color: isNearest ? "#38bdf8" : "#94a3b8",
+                            weight: isNearest ? 1.5 : 1,
+                            dashArray: isNearest ? "4 4" : "2 3",
+                            opacity: isNearest ? 0.8 : 0.45,
+                          }}
+                        />
+                      )}
+                      <Marker position={[ship.lat, ship.lon]} icon={isNearest ? shipIcon : secondaryShipIcon}>
+                        <Popup>
+                          <div className="text-xs p-1 space-y-1.5 min-w-[200px]">
+                            <div className="flex items-center gap-1.5 font-bold text-sm text-foreground">
+                              <span>🚢</span>
+                              <span className="truncate">{ship.ship_name || ship.shipname || "Vessel " + (ship.mmsi || "")}</span>
+                              <span>{getFlagEmoji(ship.flag)}</span>
                             </div>
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">Type:</span>
-                              <span className="capitalize font-medium">{ship.vessel_type || "Vessel"}</span>
+                            <div className="text-muted-foreground text-[11px] flex items-center gap-1.5">
+                              {isNearest ? (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-500/20 text-sky-400">
+                                  Top Suspect (Nearest)
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-500/20 text-teal-400">
+                                  Nearby Vessel #{vIdx + 1}
+                                </span>
+                              )}
+                              <span>Cluster <strong className="text-primary">#{a.debris_cluster_id}</strong></span>
                             </div>
-                            {ship.mmsi && (
+                            <div className="border-t border-border/40 pt-1 space-y-0.5 text-[11px]">
                               <div className="flex justify-between">
-                                <span className="text-muted-foreground">MMSI:</span>
-                                <span className="font-mono">{ship.mmsi}</span>
+                                <span className="text-muted-foreground">Distance:</span>
+                                <span className="text-sky-400 font-semibold">{ship.distance_km != null ? `${ship.distance_km.toFixed(2)} km` : "Nearby"}</span>
                               </div>
-                            )}
-                            {ship.imo && (
                               <div className="flex justify-between">
-                                <span className="text-muted-foreground">IMO:</span>
-                                <span className="font-mono">{ship.imo}</span>
+                                <span className="text-muted-foreground">Type:</span>
+                                <span className="capitalize font-medium">{ship.vessel_type || "Vessel"}</span>
                               </div>
-                            )}
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">Flag:</span>
-                              <span>{ship.flag || "Unknown"} {getFlagEmoji(ship.flag)}</span>
+                              {ship.mmsi && (
+                                <div className="flex justify-between">
+                                  <span className="text-muted-foreground">MMSI:</span>
+                                  <span className="font-mono">{ship.mmsi}</span>
+                                </div>
+                              )}
+                              {ship.imo && (
+                                <div className="flex justify-between">
+                                  <span className="text-muted-foreground">IMO:</span>
+                                  <span className="font-mono">{ship.imo}</span>
+                                </div>
+                              )}
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Flag:</span>
+                                <span>{ship.flag || "Unknown"} {getFlagEmoji(ship.flag)}</span>
+                              </div>
+                              {(ship.hours ?? ship.fishing_hours) !== undefined && (ship.hours ?? ship.fishing_hours)! > 0 && (
+                                <div className="flex justify-between">
+                                  <span className="text-muted-foreground">Activity:</span>
+                                  <span>{(ship.hours ?? ship.fishing_hours)!.toFixed(1)} hrs</span>
+                                </div>
+                              )}
                             </div>
-                            {(ship.hours ?? ship.fishing_hours) !== undefined && (ship.hours ?? ship.fishing_hours)! > 0 && (
-                              <div className="flex justify-between">
-                                <span className="text-muted-foreground">Activity:</span>
-                                <span>{(ship.hours ?? ship.fishing_hours)!.toFixed(1)} hrs</span>
-                              </div>
-                            )}
                           </div>
-                        </div>
-                      </Popup>
-                    </Marker>
-                  </React.Fragment>
-                );
+                        </Popup>
+                      </Marker>
+                    </React.Fragment>
+                  );
+                });
               })}
           </MapContainer>
 
