@@ -205,45 +205,6 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
     return lines;
   }, [backtrackGeoJsons, animProgress, selectedCluster]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
-
-  const handleBacktrack = async (clusterId: number) => {
-    setBacktrackingIds(prev => new Set(prev).add(clusterId));
-    try {
-      await backtrackCluster(runId, clusterId);
-      // Wait a bit, then refresh the data
-      setTimeout(() => {
-        Promise.all([loadAttribution(runId), loadBacktrackSummary(runId)]).then(
-          async ([attr, bt]) => {
-            setAttribution(attr);
-            setBacktrack(bt);
-            const clusterIds = bt.map((b) => b.cluster_id);
-            const geoJsons = await loadAllBacktrackGeoJsons(clusterIds, runId);
-            setBacktrackGeoJsons(geoJsons);
-            setBacktrackingIds(prev => {
-              const next = new Set(prev);
-              next.delete(clusterId);
-              return next;
-            });
-          }
-        );
-      }, 2000);
-    } catch (e) {
-      console.error(e);
-      setBacktrackingIds(prev => {
-        const next = new Set(prev);
-        next.delete(clusterId);
-        return next;
-      });
-    }
-  };
-
   const clusterCoords = useMemo(() => {
     const map: Record<number, [number, number]> = {};
     (csv || []).forEach((r) => {
@@ -282,6 +243,45 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
       river: parseFloat(((a.river_score || 0) * 100).toFixed(1)),
     }));
   }, [attribution]);
+
+  const handleBacktrack = async (clusterId: number) => {
+    setBacktrackingIds(prev => new Set(prev).add(clusterId));
+    try {
+      await backtrackCluster(runId, clusterId);
+      // Wait a bit, then refresh the data
+      setTimeout(() => {
+        Promise.all([loadAttribution(runId), loadBacktrackSummary(runId)]).then(
+          async ([attr, bt]) => {
+            setAttribution(attr || []);
+            setBacktrack(bt || []);
+            const clusterIds = (bt || []).map((b) => b.cluster_id);
+            const geoJsons = await loadAllBacktrackGeoJsons(clusterIds, runId);
+            setBacktrackGeoJsons(geoJsons || {});
+            setBacktrackingIds(prev => {
+              const next = new Set(prev);
+              next.delete(clusterId);
+              return next;
+            });
+          }
+        );
+      }, 2000);
+    } catch (e) {
+      console.error(e);
+      setBacktrackingIds(prev => {
+        const next = new Set(prev);
+        next.delete(clusterId);
+        return next;
+      });
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   const confColor = (c: string) =>
     c === "high" ? "text-emerald-400 bg-emerald-500/15" : c === "medium" ? "text-yellow-400 bg-yellow-500/15" : "text-red-400 bg-red-500/15";
