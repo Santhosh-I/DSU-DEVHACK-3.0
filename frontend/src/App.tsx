@@ -8,21 +8,25 @@ import RunDetailPage from "@/pages/RunDetailPage";
 import ModelPage from "@/pages/modelpage";
 import HotspotsPage from "@/pages/HotspotsPage";
 
+import ErrorBoundary from "@/components/ErrorBoundary";
+
 const App: React.FC = () => {
   return (
-    <BrowserRouter>
-      <div className="min-h-screen bg-background text-foreground">
-        <Navbar />
-        <Routes>
-          <Route path="/" element={<LandingPage />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/tracking" element={<TrackingPage />} />
-          <Route path="/model" element={<ModelPage />} />
-          <Route path="/runs/:id" element={<RunDetailPage />} />
-          <Route path="/hotspots" element={<HotspotsPage />} />
-        </Routes>
-      </div>
-    </BrowserRouter>
+    <ErrorBoundary fallbackTitle="Application Error">
+      <BrowserRouter>
+        <div className="min-h-screen bg-background text-foreground">
+          <Navbar />
+          <Routes>
+            <Route path="/" element={<LandingPage />} />
+            <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/tracking" element={<TrackingPage />} />
+            <Route path="/model" element={<ModelPage />} />
+            <Route path="/runs/:id" element={<RunDetailPage />} />
+            <Route path="/hotspots" element={<HotspotsPage />} />
+          </Routes>
+        </div>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 };
 

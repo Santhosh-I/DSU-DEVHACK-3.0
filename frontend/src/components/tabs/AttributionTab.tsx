@@ -76,12 +76,22 @@ const TILE_LAYERS = {
 function FitBacktrackBounds({ backtrack }: { backtrack: BacktrackEntry[] }) {
   const map = useMap();
   useEffect(() => {
-    if (backtrack && backtrack.length > 0) {
+    if (backtrack && Array.isArray(backtrack) && backtrack.length > 0) {
       const bounds = L.latLngBounds([]);
       backtrack.forEach((bt) => {
-        bounds.extend([bt.source_centroid[1], bt.source_centroid[0]]);
-        bounds.extend([bt.source_bbox[1], bt.source_bbox[0]]);
-        bounds.extend([bt.source_bbox[3], bt.source_bbox[2]]);
+        if (bt.source_centroid && Array.isArray(bt.source_centroid) && bt.source_centroid.length >= 2) {
+          if (Number.isFinite(bt.source_centroid[1]) && Number.isFinite(bt.source_centroid[0])) {
+            bounds.extend([bt.source_centroid[1], bt.source_centroid[0]]);
+          }
+        }
+        if (bt.source_bbox && Array.isArray(bt.source_bbox) && bt.source_bbox.length >= 4) {
+          if (Number.isFinite(bt.source_bbox[1]) && Number.isFinite(bt.source_bbox[0])) {
+            bounds.extend([bt.source_bbox[1], bt.source_bbox[0]]);
+          }
+          if (Number.isFinite(bt.source_bbox[3]) && Number.isFinite(bt.source_bbox[2])) {
+            bounds.extend([bt.source_bbox[3], bt.source_bbox[2]]);
+          }
+        }
       });
       if (bounds.isValid()) {
         map.fitBounds(bounds, { padding: [50, 50] });
@@ -129,19 +139,22 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
       loadDebrisSummaryCsv(runId)
     ]).then(
       async ([attr, bt, meta, summary, csvData]) => {
-        setAttribution(attr);
-        setBacktrack(bt);
-        setMetadata(meta);
-        setTargetDate(summary.target_date);
-        setCsv(csvData);
+        setAttribution(attr || []);
+        setBacktrack(bt || []);
+        setMetadata(meta || null);
+        setTargetDate(summary?.target_date || null);
+        setCsv(csvData || []);
 
-        const clusterIds = bt.map((b) => b.cluster_id);
+        const clusterIds = (bt || []).map((b) => b.cluster_id);
         const geoJsons = await loadAllBacktrackGeoJsons(clusterIds, runId);
-        setBacktrackGeoJsons(geoJsons);
+        setBacktrackGeoJsons(geoJsons || {});
 
         setLoading(false);
       }
-    );
+    ).catch((err) => {
+      console.error("Failed to load attribution tab data:", err);
+      setLoading(false);
+    });
   }, [runId]);
 
   // Animation Loop
@@ -233,28 +246,42 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
 
   const clusterCoords = useMemo(() => {
     const map: Record<number, [number, number]> = {};
-    csv.forEach((r) => {
-      map[r.cluster_id] = [r.lat, r.lon];
+    (csv || []).forEach((r) => {
+      if (Number.isFinite(r.lat) && Number.isFinite(r.lon)) {
+        map[r.cluster_id] = [r.lat, r.lon];
+      }
     });
-    backtrack.forEach((b) => {
+    (backtrack || []).forEach((b) => {
       if (!map[b.cluster_id]) {
-        map[b.cluster_id] = [b.release_lat || b.source_centroid[1], b.release_lon || b.source_centroid[0]];
+        const lat = b.release_lat ?? (b.source_centroid ? b.source_centroid[1] : undefined);
+        const lon = b.release_lon ?? (b.source_centroid ? b.source_centroid[0] : undefined);
+        if (Number.isFinite(lat) && Number.isFinite(lon)) {
+          map[b.cluster_id] = [lat!, lon!];
+        }
       }
     });
     return map;
   }, [csv, backtrack]);
 
-  const nonBacktrackedPlastics = csv.filter(
-    (row) => row.polymer_type === "Marine Debris (Plastic)" && !backtrack.some((bt) => bt.cluster_id === row.cluster_id)
-  );
+  const nonBacktrackedPlastics = useMemo(() => {
+    return (csv || []).filter(
+      (row) =>
+        row.polymer_type === "Marine Debris (Plastic)" &&
+        Number.isFinite(row.lat) &&
+        Number.isFinite(row.lon) &&
+        !(backtrack || []).some((bt) => bt.cluster_id === row.cluster_id)
+    );
+  }, [csv, backtrack]);
 
-  const scoreData = attribution.map((a) => ({
-    name: `#${a.debris_cluster_id}`,
-    fishing: parseFloat((a.fishing_score * 100).toFixed(1)),
-    industrial: parseFloat((a.industrial_score * 100).toFixed(1)),
-    shipping: parseFloat((a.shipping_score * 100).toFixed(1)),
-    river: parseFloat((a.river_score * 100).toFixed(1)),
-  }));
+  const scoreData = useMemo(() => {
+    return (attribution || []).map((a) => ({
+      name: `#${a.debris_cluster_id}`,
+      fishing: parseFloat(((a.fishing_score || 0) * 100).toFixed(1)),
+      industrial: parseFloat(((a.industrial_score || 0) * 100).toFixed(1)),
+      shipping: parseFloat(((a.shipping_score || 0) * 100).toFixed(1)),
+      river: parseFloat(((a.river_score || 0) * 100).toFixed(1)),
+    }));
+  }, [attribution]);
 
   const confColor = (c: string) =>
     c === "high" ? "text-emerald-400 bg-emerald-500/15" : c === "medium" ? "text-yellow-400 bg-yellow-500/15" : "text-red-400 bg-red-500/15";
@@ -358,93 +385,109 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
                 ) : null
               )}
 
-            {showSourceRegions && backtrack.map((bt) => (
-              <Rectangle
-                key={`bbox-${bt.cluster_id}`}
-                bounds={[
-                  [bt.source_bbox[1], bt.source_bbox[0]],
-                  [bt.source_bbox[3], bt.source_bbox[2]],
-                ]}
-                pathOptions={{
-                  color: "#F59E0B",
-                  weight: 1.8,
-                  fillColor: "#F59E0B",
-                  fillOpacity: 0.12,
-                  dashArray: "4 4",
-                }}
-              >
-                <Popup>
-                  <div className="text-xs">
-                    <strong>Source Area for Cluster #{bt.cluster_id}</strong><br />
-                    BBox: [{bt.source_bbox.join(", ")}]<br />
-                    Probability: {(bt.source_probability * 100).toFixed(1)}%
-                  </div>
-                </Popup>
-              </Rectangle>
-            ))}
+            {showSourceRegions &&
+              (backtrack || []).map((bt) => {
+                if (!bt.source_bbox || !Array.isArray(bt.source_bbox) || bt.source_bbox.length < 4) return null;
+                const [bLon1, bLat1, bLon2, bLat2] = bt.source_bbox;
+                if (!Number.isFinite(bLat1) || !Number.isFinite(bLon1) || !Number.isFinite(bLat2) || !Number.isFinite(bLon2)) return null;
+                return (
+                  <Rectangle
+                    key={`bbox-${bt.cluster_id}`}
+                    bounds={[
+                      [bLat1, bLon1],
+                      [bLat2, bLon2],
+                    ]}
+                    pathOptions={{
+                      color: "#F59E0B",
+                      weight: 1.8,
+                      fillColor: "#F59E0B",
+                      fillOpacity: 0.12,
+                      dashArray: "4 4",
+                    }}
+                  >
+                    <Popup>
+                      <div className="text-xs">
+                        <strong>Source Area for Cluster #{bt.cluster_id}</strong><br />
+                        BBox: [{bt.source_bbox.join(", ")}]<br />
+                        Probability: {((bt.source_probability || 0) * 100).toFixed(1)}%
+                      </div>
+                    </Popup>
+                  </Rectangle>
+                );
+              })}
 
-            {showDebrisPoints && backtrack.map((bt) => (
-              <CircleMarker
-                key={`cluster-${bt.cluster_id}`}
-                center={[bt.release_lat || bt.source_centroid[1], bt.release_lon || bt.source_centroid[0]]}
-                radius={8}
-                pathOptions={{
-                  color: "#FFFFFF",
-                  fillColor: "#EF4444",
-                  fillOpacity: 0.9,
-                  weight: 2,
-                }}
-              >
-                <Popup>
-                  <div className="text-xs">
-                    <strong>Debris Cluster #{bt.cluster_id}</strong><br />
-                    Particles Tracked: {bt.n_particles}<br />
-                    Backtrack Duration: {bt.days_to_source} Days
-                  </div>
-                </Popup>
-              </CircleMarker>
-            ))}
+            {showDebrisPoints &&
+              (backtrack || []).map((bt) => {
+                const lat = bt.release_lat ?? (bt.source_centroid ? bt.source_centroid[1] : undefined);
+                const lon = bt.release_lon ?? (bt.source_centroid ? bt.source_centroid[0] : undefined);
+                if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+                return (
+                  <CircleMarker
+                    key={`cluster-${bt.cluster_id}`}
+                    center={[lat!, lon!]}
+                    radius={8}
+                    pathOptions={{
+                      color: "#FFFFFF",
+                      fillColor: "#EF4444",
+                      fillOpacity: 0.9,
+                      weight: 2,
+                    }}
+                  >
+                    <Popup>
+                      <div className="text-xs">
+                        <strong>Debris Cluster #{bt.cluster_id}</strong><br />
+                        Particles Tracked: {bt.n_particles || "—"}<br />
+                        Backtrack Duration: {bt.days_to_source || "—"} Days
+                      </div>
+                    </Popup>
+                  </CircleMarker>
+                );
+              })}
 
-            {showNonBacktracked && nonBacktrackedPlastics.map((row) => (
-              <CircleMarker
-                key={`nb-cluster-${row.cluster_id}`}
-                center={[row.lat, row.lon]}
-                radius={7}
-                pathOptions={{
-                  color: "#FFFFFF",
-                  fillColor: "#6B7280",
-                  fillOpacity: 0.7,
-                  weight: 1.5,
-                  dashArray: "2 2",
-                }}
-              >
-                <Popup>
-                  <div className="text-xs flex flex-col gap-2 p-1">
-                    <div>
-                      <strong>Debris Cluster #{row.cluster_id}</strong><br />
-                      Not Backtracked
-                    </div>
-                    <button 
-                      onClick={() => handleBacktrack(row.cluster_id)}
-                      disabled={backtrackingIds.has(row.cluster_id)}
-                      className="px-3 py-1.5 bg-primary text-primary-foreground rounded text-xs font-semibold disabled:opacity-50"
-                    >
-                      {backtrackingIds.has(row.cluster_id) ? "Backtracking..." : "Backtrack this cluster"}
-                    </button>
-                  </div>
-                </Popup>
-              </CircleMarker>
-            ))}
+            {showNonBacktracked &&
+              nonBacktrackedPlastics.map((row) => {
+                if (!Number.isFinite(row.lat) || !Number.isFinite(row.lon)) return null;
+                return (
+                  <CircleMarker
+                    key={`nb-cluster-${row.cluster_id}`}
+                    center={[row.lat, row.lon]}
+                    radius={7}
+                    pathOptions={{
+                      color: "#FFFFFF",
+                      fillColor: "#6B7280",
+                      fillOpacity: 0.7,
+                      weight: 1.5,
+                      dashArray: "2 2",
+                    }}
+                  >
+                    <Popup>
+                      <div className="text-xs flex flex-col gap-2 p-1">
+                        <div>
+                          <strong>Debris Cluster #{row.cluster_id}</strong><br />
+                          Not Backtracked
+                        </div>
+                        <button 
+                          onClick={() => handleBacktrack(row.cluster_id)}
+                          disabled={backtrackingIds.has(row.cluster_id)}
+                          className="px-3 py-1.5 bg-primary text-primary-foreground rounded text-xs font-semibold disabled:opacity-50"
+                        >
+                          {backtrackingIds.has(row.cluster_id) ? "Backtracking..." : "Backtrack this cluster"}
+                        </button>
+                      </div>
+                    </Popup>
+                  </CircleMarker>
+                );
+              })}
 
             {showNearbyShips &&
-              attribution.map((a) => {
+              (attribution || []).map((a) => {
                 if (selectedCluster !== null && selectedCluster !== a.debris_cluster_id) return null;
                 const ship = a.nearest_ship;
-                if (!ship || typeof ship.lat !== "number" || typeof ship.lon !== "number") return null;
+                if (!ship || !Number.isFinite(ship.lat) || !Number.isFinite(ship.lon)) return null;
                 const cCoord = clusterCoords[a.debris_cluster_id];
                 return (
                   <React.Fragment key={`ship-group-${a.debris_cluster_id}`}>
-                    {cCoord && (
+                    {cCoord && Number.isFinite(cCoord[0]) && Number.isFinite(cCoord[1]) && (
                       <Polyline
                         positions={[cCoord, [ship.lat, ship.lon]]}
                         pathOptions={{
@@ -469,7 +512,7 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
                           <div className="border-t border-border/40 pt-1 space-y-0.5 text-[11px]">
                             <div className="flex justify-between">
                               <span className="text-muted-foreground">Distance:</span>
-                              <span className="text-sky-400 font-semibold">{ship.distance_km?.toFixed(2)} km</span>
+                              <span className="text-sky-400 font-semibold">{ship.distance_km != null ? `${ship.distance_km.toFixed(2)} km` : "Nearby"}</span>
                             </div>
                             <div className="flex justify-between">
                               <span className="text-muted-foreground">Type:</span>
@@ -811,13 +854,13 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
               <h3 className="font-heading font-semibold mb-4">Backtrack Configuration</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 {[
-                  { icon: Database, label: "Ocean Data", value: metadata.cmems_product.split("_").slice(-2).join("_") },
-                  { icon: Wind, label: "Wind Data", value: "ERA5 (u10, v10)" },
-                  { icon: Cpu, label: "Integrator", value: metadata.integrator },
-                  { icon: Cpu, label: "Time Step", value: `${metadata.time_step_hours}h` },
-                  { icon: GitBranch, label: "Particles", value: `${metadata.n_particles} per cluster` },
-                  { icon: GitBranch, label: "Duration", value: `${metadata.bt_days} days` },
-                  { icon: Cpu, label: "Diffusion (Kh)", value: metadata.horizontal_diffusion_kh.toString() },
+                  { icon: Database, label: "Ocean Data", value: metadata.cmems_product ? metadata.cmems_product.split("_").slice(-2).join("_") : "N/A" },
+                  { icon: Wind, label: "Wind Data", value: metadata.era5_product || "ERA5 (u10, v10)" },
+                  { icon: Cpu, label: "Integrator", value: metadata.integrator || "RK4" },
+                  { icon: Cpu, label: "Time Step", value: metadata.time_step_hours != null ? `${metadata.time_step_hours}h` : "N/A" },
+                  { icon: GitBranch, label: "Particles", value: metadata.n_particles != null ? `${metadata.n_particles} per cluster` : "N/A" },
+                  { icon: GitBranch, label: "Duration", value: metadata.bt_days != null ? `${metadata.bt_days} days` : "N/A" },
+                  { icon: Cpu, label: "Diffusion (Kh)", value: metadata.horizontal_diffusion_kh != null ? metadata.horizontal_diffusion_kh.toString() : "N/A" },
                 ].map((item) => {
                   const Icon = item.icon;
                   return (
@@ -834,7 +877,7 @@ const AttributionTab: React.FC<AttributionTabProps> = ({ runId }) => {
               <div className="mt-4">
                 <div className="text-xs text-muted-foreground mb-2">Kernels</div>
                 <div className="flex flex-wrap gap-2">
-                  {metadata.kernels.map((k) => (
+                  {(metadata.kernels || []).map((k) => (
                     <span key={k} className="px-2.5 py-1 bg-primary/10 text-primary rounded-md text-xs font-medium">
                       {k}
                     </span>
